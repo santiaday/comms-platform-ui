@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Communications Outcomes</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Communications Outcomes</h1>
+      <p class="sub">Show-rate &amp; A/B confidence per objective · updates hourly from Salesforce</p>
+    </div>
+    <div class="status">
+      <span id="updated" class="muted">—</span>
+      <button id="refresh" title="Refresh now">↻</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+  <main id="objectives" aria-busy="true"></main>
+
+  <footer class="muted">
+    Bayesian P(best) · winner declared at each objective's confidence threshold ·
+    rates = Show / (Show + No-Show + Canceled + Rescheduled)
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

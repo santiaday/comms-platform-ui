@@ -1,0 +1,20 @@
+{
+  "name": "comms-platform-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Communications outcomes dashboard — show-rate & A/B confidence per objective/variant. Read-only; reads the comms data layer via the platform SQL endpoint.",
+  "scripts": {
+    "start": "node --import tsx src/server.ts",
+    "dev": "node --import tsx --watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "test": "node --test --import tsx --test-reporter=spec test/*.test.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
