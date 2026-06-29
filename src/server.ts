@@ -56,18 +56,27 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
 
-  if (path === "/api/health") return sendJson(res, 200, { ok: true });
+  if (path === "/api/health") {
+    return sendJson(res, 200, {
+      ok: true,
+      configured: !!process.env["COMMS_WRITER_BEARER"],
+      endpoint: process.env["QUERY_ENDPOINT_URL"] ?? DEFAULT_QUERY_ENDPOINT_URL,
+    });
+  }
 
   if (path === "/api/metrics") {
+    // Operational failures (missing bearer, upstream error) return 200 + {ok:false,error}
+    // so the SPA can render a clear banner. A 5xx here gets swallowed by the
+    // DeployBay gateway into an opaque HTML page, hiding the real reason.
     const cfg = resolveConfig();
-    if ("error" in cfg) return sendJson(res, 503, { ok: false, error: cfg.error });
+    if ("error" in cfg) return sendJson(res, 200, { ok: false, error: cfg.error });
     try {
       const samples = Number(process.env["CONFIDENCE_SAMPLES"] ?? "50000");
       const objectives = await fetchObjectiveMetrics(cfg, { samples });
       return sendJson(res, 200, { ok: true, computed_at: new Date().toISOString(), objectives });
     } catch (err) {
       const msg = err instanceof MetricsError ? err.message : err instanceof Error ? err.message : String(err);
-      return sendJson(res, 502, { ok: false, error: msg });
+      return sendJson(res, 200, { ok: false, error: `metrics query failed: ${msg}` });
     }
   }
 
