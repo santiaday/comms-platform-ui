@@ -19,7 +19,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  fetchObjectiveMetrics, DEFAULT_QUERY_ENDPOINT_URL, IDENTITY, MetricsError,
+  fetchObjectiveMetrics, fetchEmailEngagement, DEFAULT_QUERY_ENDPOINT_URL, IDENTITY, MetricsError,
   type EndpointConfig,
 } from "./metrics-client.js";
 
@@ -73,7 +73,16 @@ const server = createServer(async (req, res) => {
     try {
       const samples = Number(process.env["CONFIDENCE_SAMPLES"] ?? "50000");
       const objectives = await fetchObjectiveMetrics(cfg, { samples });
-      return sendJson(res, 200, { ok: true, computed_at: new Date().toISOString(), objectives });
+      // Engagement is best-effort: a missing view (pre-0048) or empty result
+      // must not blank the objective metrics. Degrade to [] with a note.
+      let engagement: unknown[] = [];
+      let engagement_error: string | undefined;
+      try {
+        engagement = await fetchEmailEngagement(cfg);
+      } catch (e) {
+        engagement_error = e instanceof Error ? e.message : String(e);
+      }
+      return sendJson(res, 200, { ok: true, computed_at: new Date().toISOString(), objectives, engagement, engagement_error });
     } catch (err) {
       const msg = err instanceof MetricsError ? err.message : err instanceof Error ? err.message : String(err);
       return sendJson(res, 200, { ok: false, error: `metrics query failed: ${msg}` });

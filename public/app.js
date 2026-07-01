@@ -45,6 +45,40 @@ function renderComponent(c) {
   </div>`;
 }
 
+function renderEngagementExperiment(e) {
+  const anyData = e.variants.some((v) =>
+    v.delivered || v.opened || v.clicked || v.replied || v.bounced || v.unsubscribed || v.complained);
+  const totalSent = e.variants.reduce((s, v) => s + (v.sent || 0), 0);
+
+  const body = anyData
+    ? `<table>
+        <thead><tr><th>Variant</th><th>Sent</th><th>Deliv.</th><th>Open</th><th>Click</th><th>Reply</th><th>Bounce</th></tr></thead>
+        <tbody>${[...e.variants].sort((a, b) => (b.reply_rate ?? -1) - (a.reply_rate ?? -1)).map((v) => `<tr>
+          <td><span class="vk">${esc(variantShort(v.variant_key))}</span></td>
+          <td>${v.sent}</td>
+          <td>${pct(v.delivery_rate)}</td>
+          <td>${pct(v.open_rate)}</td>
+          <td>${pct(v.click_rate)}</td>
+          <td class="rate">${pct(v.reply_rate)}</td>
+          <td>${pct(v.bounce_rate)}</td>
+        </tr>`).join("")}</tbody>
+      </table>`
+    : `<div class="pending-note">⏳ Sent ${totalSent} · awaiting engagement data (Outreach poll pending)</div>`;
+
+  return `<div class="comp">
+    <div class="ctitle"><span class="pill email">email</span><span class="ot">engagement</span><span class="exp">${esc(e.experiment_key || "—")}</span></div>
+    ${body}
+  </div>`;
+}
+
+function renderEngagement(engagement) {
+  if (!engagement || engagement.length === 0) return "";
+  return `<section class="obj">
+    <div class="head"><span class="name">📧 Email engagement</span><span class="thr">per experiment · reply is decision-bearing · open rate is MPP-inflated (directional only)</span></div>
+    ${engagement.map(renderEngagementExperiment).join("")}
+  </section>`;
+}
+
 function renderObjectives(objectives) {
   // group components by objective
   const byObj = new Map();
@@ -76,7 +110,7 @@ async function load() {
       return;
     }
     banner.hidden = true;
-    main.innerHTML = renderObjectives(data.objectives || []);
+    main.innerHTML = renderObjectives(data.objectives || []) + renderEngagement(data.engagement || []);
     main.setAttribute("aria-busy", "false");
     $("#updated").textContent = "updated " + new Date(data.computed_at).toLocaleTimeString();
   } catch (e) {

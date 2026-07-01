@@ -1,7 +1,45 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { assemble } from "../src/metrics-client.js";
+import { assemble, assembleEngagement } from "../src/metrics-client.js";
 import { computeConfidence } from "../src/confidence.js";
+
+const erow = (o: Partial<any>) => ({
+  objective_key: "demo_driver_email", experiment_key: "DemoDriver-2+Days-E1-SMB", variant_key: "D",
+  sent: 0, delivered: 0, opened: 0, clicked: 0, replied: 0, bounced: 0, unsubscribed: 0, complained: 0,
+  ...o,
+});
+
+describe("assembleEngagement", () => {
+  it("groups by experiment and computes standard email rates", () => {
+    const out = assembleEngagement([
+      erow({ variant_key: "D", sent: 100, delivered: 95, opened: 40, clicked: 10, replied: 5, bounced: 5 }),
+      erow({ variant_key: "E", sent: 50, delivered: 50, opened: 30, clicked: 8, replied: 4, bounced: 0 }),
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.experiment_key, "DemoDriver-2+Days-E1-SMB");
+    const d = out[0]!.variants.find((v) => v.variant_key === "D")!;
+    assert.equal(d.delivery_rate, 0.95);                          // delivered / sent
+    assert.equal(d.open_rate, Math.round((40 / 95) * 1e4) / 1e4); // opened / delivered
+    assert.equal(d.reply_rate, Math.round((5 / 95) * 1e4) / 1e4);
+    assert.equal(d.bounce_rate, 0.05);                            // bounced / sent
+  });
+
+  it("returns null rates (not 0%) when the denominator is zero — unpolled is not 0%", () => {
+    const out = assembleEngagement([erow({ variant_key: "D", sent: 1, delivered: 0 })]);
+    const d = out[0]!.variants[0]!;
+    assert.equal(d.delivery_rate, 0);   // 0 delivered of 1 sent IS measurable
+    assert.equal(d.open_rate, null);    // opened/delivered with delivered=0 -> unknown, not 0%
+    assert.equal(d.reply_rate, null);
+  });
+
+  it("splits distinct experiments into separate groups", () => {
+    const out = assembleEngagement([
+      erow({ experiment_key: "X", sent: 1 }),
+      erow({ experiment_key: "Y", sent: 1 }),
+    ]);
+    assert.equal(out.length, 2);
+  });
+});
 
 const row = (o: Partial<any>) => ({
   objective_key: "demo_driver_morning_sms", objective_version: 1, rank: 1, label: "primary",
