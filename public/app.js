@@ -26,9 +26,17 @@ function renderComponent(c) {
     </tr>`;
   }).join("");
 
+  // Leader's decided sample size — surfaced so a high P(best) on a tiny sample
+  // reads honestly (a winner is never declared under MIN_N decided obs).
+  const MIN_N = 30;
+  const leaderV = c.variants.find((v) => c.leader && (v.variant_key ?? "(none)") === c.leader);
+  const leaderN = leaderV ? leaderV.showed + leaderV.not_showed : 0;
   const verdict = c.conclusive
-    ? `<div class="verdict win"><span class="dot"></span>Winner: <b>${esc(variantShort(c.leader))}</b> — P(best) ${pct(c.prob_leader_best)} ≥ ${pct(c.confidence_threshold)} threshold</div>`
-    : `<div class="verdict pend"><span class="dot"></span>Not conclusive — leader <b>${esc(variantShort(c.leader) || "—")}</b> at ${pct(c.prob_leader_best)} (need ${pct(c.confidence_threshold)})</div>`;
+    ? `<div class="verdict win"><span class="dot"></span>Winner: <b>${esc(variantShort(c.leader))}</b> — P(best) ${pct(c.prob_leader_best)} ≥ ${pct(c.confidence_threshold)} threshold (n=${leaderN})</div>`
+    : `<div class="verdict pend"><span class="dot"></span>Not conclusive — leader <b>${esc(variantShort(c.leader) || "—")}</b> at ${pct(c.prob_leader_best)}` +
+      (leaderN < MIN_N
+        ? ` · only ${leaderN} decided (need ≥${MIN_N} + ${pct(c.confidence_threshold)})`
+        : ` (need ${pct(c.confidence_threshold)})`) + `</div>`;
 
   return `<div class="comp">
     <div class="ctitle">
@@ -43,6 +51,40 @@ function renderComponent(c) {
     </table>
     ${verdict}
   </div>`;
+}
+
+function renderEngagementExperiment(e) {
+  const anyData = e.variants.some((v) =>
+    v.delivered || v.opened || v.clicked || v.replied || v.bounced || v.unsubscribed || v.complained);
+  const totalSent = e.variants.reduce((s, v) => s + (v.sent || 0), 0);
+
+  const body = anyData
+    ? `<table>
+        <thead><tr><th>Variant</th><th>Sent</th><th>Deliv.</th><th>Open</th><th>Click</th><th>Reply</th><th>Bounce</th></tr></thead>
+        <tbody>${[...e.variants].sort((a, b) => (b.reply_rate ?? -1) - (a.reply_rate ?? -1)).map((v) => `<tr>
+          <td><span class="vk">${esc(variantShort(v.variant_key))}</span></td>
+          <td>${v.sent}</td>
+          <td>${pct(v.delivery_rate)}</td>
+          <td>${pct(v.open_rate)}</td>
+          <td>${pct(v.click_rate)}</td>
+          <td class="rate">${pct(v.reply_rate)}</td>
+          <td>${pct(v.bounce_rate)}</td>
+        </tr>`).join("")}</tbody>
+      </table>`
+    : `<div class="pending-note">⏳ Sent ${totalSent} · awaiting engagement data (Outreach poll pending)</div>`;
+
+  return `<div class="comp">
+    <div class="ctitle"><span class="pill email">email</span><span class="ot">engagement</span><span class="exp">${esc(e.experiment_key || "—")}</span></div>
+    ${body}
+  </div>`;
+}
+
+function renderEngagement(engagement) {
+  if (!engagement || engagement.length === 0) return "";
+  return `<section class="obj">
+    <div class="head"><span class="name">📧 Email engagement</span><span class="thr">per experiment · reply is decision-bearing · open rate is MPP-inflated (directional only)</span></div>
+    ${engagement.map(renderEngagementExperiment).join("")}
+  </section>`;
 }
 
 function renderObjectives(objectives) {
@@ -76,7 +118,7 @@ async function load() {
       return;
     }
     banner.hidden = true;
-    main.innerHTML = renderObjectives(data.objectives || []);
+    main.innerHTML = renderObjectives(data.objectives || []) + renderEngagement(data.engagement || []);
     main.setAttribute("aria-busy", "false");
     $("#updated").textContent = "updated " + new Date(data.computed_at).toLocaleTimeString();
   } catch (e) {
