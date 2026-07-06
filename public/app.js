@@ -26,9 +26,17 @@ function renderComponent(c) {
     </tr>`;
   }).join("");
 
+  // Leader's decided sample size — surfaced so a high P(best) on a tiny sample
+  // reads honestly (a winner is never declared under MIN_N decided obs).
+  const MIN_N = 30;
+  const leaderV = c.variants.find((v) => c.leader && (v.variant_key ?? "(none)") === c.leader);
+  const leaderN = leaderV ? leaderV.showed + leaderV.not_showed : 0;
   const verdict = c.conclusive
-    ? `<div class="verdict win"><span class="dot"></span>Winner: <b>${esc(variantShort(c.leader))}</b> — P(best) ${pct(c.prob_leader_best)} ≥ ${pct(c.confidence_threshold)} threshold</div>`
-    : `<div class="verdict pend"><span class="dot"></span>Not conclusive — leader <b>${esc(variantShort(c.leader) || "—")}</b> at ${pct(c.prob_leader_best)} (need ${pct(c.confidence_threshold)})</div>`;
+    ? `<div class="verdict win"><span class="dot"></span>Winner: <b>${esc(variantShort(c.leader))}</b> — P(best) ${pct(c.prob_leader_best)} ≥ ${pct(c.confidence_threshold)} threshold (n=${leaderN})</div>`
+    : `<div class="verdict pend"><span class="dot"></span>Not conclusive — leader <b>${esc(variantShort(c.leader) || "—")}</b> at ${pct(c.prob_leader_best)}` +
+      (leaderN < MIN_N
+        ? ` · only ${leaderN} decided (need ≥${MIN_N} + ${pct(c.confidence_threshold)})`
+        : ` (need ${pct(c.confidence_threshold)})`) + `</div>`;
 
   return `<div class="comp">
     <div class="ctitle">

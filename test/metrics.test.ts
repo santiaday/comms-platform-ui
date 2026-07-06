@@ -73,8 +73,42 @@ describe("assemble", () => {
 });
 
 describe("computeConfidence sanity", () => {
-  it("is conclusive for a strong split", () => {
+  it("is conclusive for a strong split with ample data", () => {
     const r = computeConfidence([{ key: "A", attained: 80, denominator: 100 }, { key: "B", attained: 20, denominator: 100 }], 0.95);
     assert.ok(r.conclusive && r.leader === "A");
+  });
+
+  it("does NOT let a tiny sample dominate P(best) or declare a winner", () => {
+    // 9/9 (100%) vs 8/16 (50%): a flat prior would give ~100% P(best).
+    const r = computeConfidence([{ key: "gift", attained: 9, denominator: 9 }, { key: "b", attained: 8, denominator: 16 }], 0.95);
+    const gift = r.variants.find((v) => v.key === "gift")!;
+    assert.ok(gift.prob_best < 0.98, `shrunk P(best) should be < 0.98, got ${gift.prob_best}`);
+    assert.equal(r.conclusive, false); // leader n=9 < minN(30) → never a winner
+  });
+
+  it("gates 'conclusive' on the leader's decided sample size (minN)", () => {
+    // Strong split but leader has only 20 decided → not conclusive by minN.
+    const small = computeConfidence([{ key: "A", attained: 18, denominator: 20 }, { key: "B", attained: 2, denominator: 20 }], 0.95);
+    assert.equal(small.conclusive, false);
+    // Same rates, ample data → conclusive.
+    const big = computeConfidence([{ key: "A", attained: 90, denominator: 100 }, { key: "B", attained: 10, denominator: 100 }], 0.95);
+    assert.ok(big.conclusive);
+  });
+});
+
+describe("assemble drops the (none) / untagged arm", () => {
+  it("excludes null variant_key rows from arms and P(best)", () => {
+    const out = assemble([
+      row({ variant_key: "A", n_attained: 55, n_failed: 55, n_denominator: 110 }),
+      row({ variant_key: "B", n_attained: 43, n_failed: 34, n_denominator: 77 }),
+      row({ variant_key: null as any, n_attained: 5, n_failed: 2, n_denominator: 7 }),
+    ], 20_000);
+    assert.equal(out.length, 1);
+    const keys = out[0]!.variants.map((v) => v.variant_key);
+    assert.deepEqual(keys.sort(), ["A", "B"]); // (none) gone
+    assert.notEqual(out[0]!.leader, "(none)");
+    // P(best) across the two real arms sums to ~1 (nothing leaked to (none)).
+    const total = out[0]!.variants.reduce((s, v) => s + v.prob_best, 0);
+    assert.ok(Math.abs(total - 1) < 0.02, `P(best) should sum to ~1, got ${total}`);
   });
 });
