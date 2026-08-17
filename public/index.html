@@ -9,8 +9,8 @@
 <body>
   <header>
     <div>
-      <h1>Communications Outcomes</h1>
-      <p class="sub">Show-rate &amp; A/B confidence per objective · updates hourly from Salesforce</p>
+      <h1>Communications Hub</h1>
+      <p class="sub" id="subtitle">Show-rate &amp; A/B confidence per objective · updates hourly from Salesforce</p>
     </div>
     <div class="status">
       <span id="updated" class="muted">—</span>
@@ -18,14 +18,39 @@
     </div>
   </header>
 
+  <nav class="tabs" role="tablist">
+    <button role="tab" class="tab active" data-tab="experiments" aria-selected="true">Experiments</button>
+    <button role="tab" class="tab" data-tab="ledger" aria-selected="false">Ledger</button>
+  </nav>
+
   <div id="banner" class="banner" hidden></div>
+
   <main id="objectives" aria-busy="true"></main>
 
-  <footer class="muted">
+  <main id="ledger" hidden>
+    <div class="ledger-toolbar">
+      <form id="person-form" autocomplete="off">
+        <select id="person-type" aria-label="Identifier type">
+          <option value="email">email</option>
+          <option value="sf_lead">sf_lead</option>
+          <option value="hubspot_contact">hubspot_contact</option>
+          <option value="outreach_prospect">outreach_prospect</option>
+          <option value="phone">phone</option>
+        </select>
+        <input id="person-value" type="text" placeholder="look up a person…" aria-label="Identifier value" />
+        <button type="submit">Search</button>
+      </form>
+      <button id="ledger-back" hidden>← back to coverage</button>
+    </div>
+    <div id="ledger-body" aria-busy="true"></div>
+  </main>
+
+  <footer class="muted" id="footnote">
     Bayesian P(best) · winner declared at each objective's confidence threshold ·
     rates = Show / (Show + No-Show + Canceled + Rescheduled)
   </footer>
 
   <script src="/app.js"></script>
+  <script src="/ledger.js"></script>
 </body>
 </html>
