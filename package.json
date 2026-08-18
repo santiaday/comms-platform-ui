@@ -9,6 +9,7 @@
     "dev": "node --import tsx --watch src/server.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
+    "scan": "node scripts/scan-secrets.mjs",
     "test": "node --test --import tsx --test-reporter=spec test/*.test.ts"
   },
   "dependencies": {},

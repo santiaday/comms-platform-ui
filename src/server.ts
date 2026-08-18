@@ -10,18 +10,25 @@
  * Env (DeployBay injects at runtime):
  *   PORT                 default 8080
  *   COMMS_WRITER_BEARER  X-Internal-Secret for the SQL endpoint (comms_writer identity)
- *   QUERY_ENDPOINT_URL   default = prod /db/agent_platform/sql
+ *   QUERY_ENDPOINT_URL   REQUIRED — the platform SQL endpoint. No default: this
+ *                        repo is public and must not carry infrastructure URLs.
  *   COMMS_IDENTITY       default = comms_writer
  *   CONFIDENCE_SAMPLES   default = 50000 (Monte-Carlo draws)
+ *   LEDGER_API_URL       REQUIRED for the ledger tab — base URL of the private
+ *                        comms-ledger API. No default, same reason.
+ *   LEDGER_BEARER        X-Internal-Secret for that API. Server-side only.
  */
 import { createServer, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  fetchObjectiveMetrics, fetchEmailEngagement, DEFAULT_QUERY_ENDPOINT_URL, IDENTITY, MetricsError,
+  fetchObjectiveMetrics, fetchEmailEngagement, IDENTITY, MetricsError,
   type EndpointConfig,
 } from "./metrics-client.js";
+import {
+  resolveLedgerConfig, fetchLedger, isKnownRoute, LedgerError,
+} from "./ledger-client.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, "..", "public");
@@ -31,6 +38,7 @@ const STATIC: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
+  "/ledger.js": { file: "ledger.js", type: "text/javascript; charset=utf-8" },
   "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
 };
 
@@ -45,9 +53,13 @@ function resolveConfig(): EndpointConfig | { error: string } {
   // We deliberately do NOT mint a separate read-only bearer.
   const bearer = process.env["COMMS_WRITER_BEARER"];
   if (!bearer) return { error: "COMMS_WRITER_BEARER is not set — provide the comms_writer SQL-endpoint bearer (see README)." };
+  // No baked-in default: this repo is public, so the endpoint address is
+  // configuration, not source. A missing value must fail loudly.
+  const endpointUrl = process.env["QUERY_ENDPOINT_URL"];
+  if (!endpointUrl) return { error: "QUERY_ENDPOINT_URL is not set — see README." };
   return {
     bearer,
-    endpointUrl: process.env["QUERY_ENDPOINT_URL"] ?? DEFAULT_QUERY_ENDPOINT_URL,
+    endpointUrl,
     identity: process.env["COMMS_IDENTITY"] ?? IDENTITY,
   };
 }
@@ -57,11 +69,36 @@ const server = createServer(async (req, res) => {
   const path = url.pathname;
 
   if (path === "/api/health") {
+    // Report only whether config is present — never the endpoint address.
+    // /api/health is unauthenticated, and echoing infrastructure URLs to
+    // anonymous callers is free reconnaissance.
     return sendJson(res, 200, {
       ok: true,
-      configured: !!process.env["COMMS_WRITER_BEARER"],
-      endpoint: process.env["QUERY_ENDPOINT_URL"] ?? DEFAULT_QUERY_ENDPOINT_URL,
+      configured: !!process.env["COMMS_WRITER_BEARER"] && !!process.env["QUERY_ENDPOINT_URL"],
+      ledger_configured:
+        !!process.env["LEDGER_API_URL"] && !!process.env["LEDGER_BEARER"],
     });
+  }
+
+  // Ledger proxy: /api/ledger/<route>. The browser calls same-origin; the
+  // bearer is added here and never leaves the server. Upstream owns all SQL.
+  if (path.startsWith("/api/ledger/")) {
+    const route = path.slice("/api/ledger/".length);
+    if (!isKnownRoute(route)) {
+      return sendJson(res, 404, { ok: false, error: "unknown ledger route" });
+    }
+    const cfg = resolveLedgerConfig();
+    if ("error" in cfg) return sendJson(res, 200, { ok: false, error: cfg.error });
+    try {
+      const upstream = await fetchLedger(cfg, route, url.searchParams);
+      // Pass the upstream status through, except 5xx: the DeployBay gateway
+      // rewrites those into an opaque HTML page, hiding the real reason.
+      const status = upstream.status >= 500 ? 200 : upstream.status;
+      return sendJson(res, status, upstream.body);
+    } catch (err) {
+      const msg = err instanceof LedgerError ? err.message : err instanceof Error ? err.message : String(err);
+      return sendJson(res, 200, { ok: false, error: `ledger query failed: ${msg}` });
+    }
   }
 
   if (path === "/api/metrics") {
@@ -104,5 +141,11 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(JSON.stringify({ msg: "comms-platform-ui listening", port: PORT, endpoint: process.env["QUERY_ENDPOINT_URL"] ?? DEFAULT_QUERY_ENDPOINT_URL, configured: !!process.env["COMMS_WRITER_BEARER"] }));
+  // Log presence, not addresses — container logs get shipped around.
+  console.log(JSON.stringify({
+    msg: "comms-platform-ui listening",
+    port: PORT,
+    configured: !!process.env["COMMS_WRITER_BEARER"] && !!process.env["QUERY_ENDPOINT_URL"],
+    ledger_configured: !!process.env["LEDGER_API_URL"] && !!process.env["LEDGER_BEARER"],
+  }));
 });
