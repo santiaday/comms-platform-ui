@@ -123,3 +123,25 @@ describe("coverageHealth", () => {
     assert.equal(coverageHealth({ n_communications: 20, unbound: true }), "degraded");
   });
 });
+
+// Regression guard for a real bug: `main { display: grid }` is an author rule
+// and therefore outranks the UA stylesheet's `[hidden] { display: none }`, so
+// setting el.hidden on a <main> had no visual effect. Tab switching appeared
+// to "do nothing" — both panes stayed rendered, stacked. Keep the override.
+describe("stylesheet", () => {
+  it("forces [hidden] to win over the author display rules on <main>", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const css = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+    assert.match(
+      css,
+      /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/,
+      "styles.css must force [hidden] to display:none !important, or tab switching silently breaks",
+    );
+    const mainRule = /(^|\n)main\s*\{[^}]*display:\s*grid/.test(css);
+    const hiddenIdx = css.search(/\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+    const mainIdx = css.search(/(^|\n)main\s*\{[^}]*display:\s*grid/);
+    if (mainRule) {
+      assert.ok(hiddenIdx > mainIdx, "[hidden] override must come after the main display rule");
+    }
+  });
+});

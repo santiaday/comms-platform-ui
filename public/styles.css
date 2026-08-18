@@ -19,6 +19,11 @@ button#refresh { background: var(--panel2); color: var(--text); border: 1px soli
   border-radius: 8px; width: 32px; height: 32px; font-size: 15px; cursor: pointer; }
 button#refresh:hover { border-color: var(--accent); }
 main { padding: 20px 24px; display: grid; gap: 18px; max-width: 1100px; }
+/* MUST outrank the `main { display: grid }` above. The browser's built-in
+   [hidden] { display: none } is a UA rule, so ANY author display rule beats
+   it — which silently defeats el.hidden on <main>. Without this, switching
+   tabs leaves the old pane rendered and stacks the new one underneath it. */
+[hidden] { display: none !important; }
 .banner { margin: 16px 24px 0; padding: 12px 14px; border-radius: 10px; background: #3a2417; color: #ffce9e;
   border: 1px solid #6b4a2a; font-size: 13px; }
 
