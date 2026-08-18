@@ -83,22 +83,23 @@ describe("coverageFlags", () => {
     assert.deepEqual(coverageFlags({ n_communications: 100 }), []);
   });
 
-  it("flags sends with no engagement as bad, and says why", () => {
-    const flags = coverageFlags({ n_communications: 482, no_engagement: true });
+  it("flags an unmeasured engagement feed as bad, and says why", () => {
+    const flags = coverageFlags({ n_communications: 680, no_engagement_feed: true });
     assert.equal(flags.length, 1);
-    assert.equal(flags[0]!.key, "no_engagement");
+    assert.equal(flags[0]!.key, "no_engagement_feed");
     assert.equal(flags[0]!.tone, "bad");
-    assert.match(flags[0]!.hint, /unmeasured, not 0%/);
+    assert.match(flags[0]!.hint, /cannot be computed/);
   });
 
-  it("reproduces the live HubSpot signature: no engagement + unattributable + unbound", () => {
+  it("orders worst-first so the severe flag leads", () => {
     const keys = coverageFlags({
-      n_communications: 482,
-      no_engagement: true,
-      unattributable: true,
+      n_communications: 680,
+      no_engagement_feed: true,
+      no_delivery_feed: true,
       unbound: true,
     }).map((f) => f.key);
-    assert.deepEqual(keys, ["no_engagement", "unattributable", "unbound"]);
+    // bad tones before warn tones
+    assert.deepEqual(keys, ["no_engagement_feed", "unbound", "no_delivery_feed"]);
   });
 
   it("flags a declared-but-silent source", () => {
@@ -119,7 +120,7 @@ describe("coverageHealth", () => {
   });
 
   it("is broken when any flag is severe, degraded when only warnings", () => {
-    assert.equal(coverageHealth({ n_communications: 482, no_engagement: true }), "broken");
+    assert.equal(coverageHealth({ n_communications: 680, no_engagement_feed: true }), "broken");
     assert.equal(coverageHealth({ n_communications: 20, unbound: true }), "degraded");
   });
 });

@@ -40,6 +40,7 @@ const STATIC: Record<string, { file: string; type: string }> = {
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/ledger.js": { file: "ledger.js", type: "text/javascript; charset=utf-8" },
   "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+  "/doorloop-logo.svg": { file: "doorloop-logo.svg", type: "image/svg+xml" },
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

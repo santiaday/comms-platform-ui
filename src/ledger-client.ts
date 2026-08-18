@@ -126,62 +126,26 @@ export interface CoverageFlag {
  * let an eight-day HubSpot outage go unnoticed in August 2026.
  */
 export function coverageFlags(row: Record<string, unknown>): CoverageFlag[] {
-  const flags: CoverageFlag[] = [];
-  if (row["declared_silent"]) {
-    flags.push({
-      key: "declared_silent",
-      label: "silent",
-      tone: "warn",
-      hint: "Registered as a comms source but has never produced a communication.",
-    });
-  }
-  if (row["observed_undeclared"]) {
-    flags.push({
-      key: "observed_undeclared",
-      label: "unregistered",
-      tone: "warn",
-      hint: "Producing communications but missing from core.sources.",
-    });
-  }
-  if (row["no_engagement"]) {
-    flags.push({
-      key: "no_engagement",
-      label: "no engagement",
-      tone: "bad",
-      hint: "Has sends but zero engagement events ever — unmeasured, not 0%.",
-    });
-  }
-  if (row["unattributable"]) {
-    flags.push({
-      key: "unattributable",
-      label: "unattributable",
-      tone: "bad",
-      hint: "Under 5% of sends can be joined to any outcome, so nothing here can be credited.",
-    });
-  }
-  if (row["unbound"]) {
-    flags.push({
-      key: "unbound",
-      label: "no objective",
-      tone: "warn",
-      hint: "Under 5% carry an objective, so these sends are absent from the experiment readout.",
-    });
-  }
-  if (row["stale"]) {
-    flags.push({
-      key: "stale",
-      label: "stale",
-      tone: "bad",
-      hint: "No activity within this source's freshness window.",
-    });
-  }
-  return flags;
+  const defs: ReadonlyArray<readonly [string, string, CoverageFlag["tone"], string]> = [
+    ["no_events_at_all", "no events", "bad",
+     "Sends are logged but no engagement events have ever arrived — unmeasured end to end."],
+    ["no_engagement_feed", "engagement unmeasured", "bad",
+     "No click or reply events exist for this source, so its engagement rate cannot be computed."],
+    ["unattributable", "unattributable", "bad",
+     "Under 5% of sends join an outcome, so these sends can never be credited."],
+    ["stale", "stale", "bad", "No activity within this source's freshness window."],
+    ["unbound", "no objective", "warn",
+     "Under 5% carry an objective, so these sends are invisible in the Experiments tab."],
+    ["no_delivery_feed", "no delivery receipts", "warn",
+     "No delivered events, so the delivery rate is unknown rather than zero."],
+    ["observed_undeclared", "unregistered", "warn",
+     "Producing communications but missing from core.sources."],
+    ["declared_silent", "silent", "warn",
+     "Registered as an active comms source but has never produced a communication."],
+  ];
+  return defs.filter(([k]) => row[k]).map(([key, label, tone, hint]) => ({ key, label, tone, hint }));
 }
 
-/**
- * Health verdict for a coverage row. `unknown` (not `ok`) when a source has
- * produced nothing — absence of data is not evidence of health.
- */
 export function coverageHealth(row: Record<string, unknown>): "ok" | "degraded" | "broken" | "unknown" {
   const flags = coverageFlags(row);
   if (flags.length === 0) {
