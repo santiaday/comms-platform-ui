@@ -23,7 +23,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  fetchObjectiveMetrics, fetchEmailEngagement, IDENTITY, MetricsError,
+  fetchObjectiveMetrics, fetchEmailEngagement, assembleExperiments, IDENTITY, MetricsError,
   type EndpointConfig,
 } from "./metrics-client.js";
 import {
@@ -120,7 +120,13 @@ const server = createServer(async (req, res) => {
       } catch (e) {
         engagement_error = e instanceof Error ? e.message : String(e);
       }
-      return sendJson(res, 200, { ok: true, computed_at: new Date().toISOString(), objectives, engagement, engagement_error });
+      // Experiment-shaped grouping is what the UI renders; the flat arrays stay
+      // in the payload so nothing that consumed them breaks.
+      const programs = assembleExperiments(objectives, engagement as never[]);
+      return sendJson(res, 200, {
+        ok: true, computed_at: new Date().toISOString(),
+        programs, objectives, engagement, engagement_error,
+      });
     } catch (err) {
       const msg = err instanceof MetricsError ? err.message : err instanceof Error ? err.message : String(err);
       return sendJson(res, 200, { ok: false, error: `metrics query failed: ${msg}` });
