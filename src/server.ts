@@ -38,9 +38,17 @@ const PORT = Number(process.env["PORT"] ?? "8080");
 const STATIC: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   "/doorloop-logo.svg": { file: "doorloop-logo.svg", type: "image/svg+xml" },
+  // The front end is an ES module graph loaded from /app.js. Every module is
+  // listed explicitly rather than served by pattern: an allowlist cannot be
+  // walked out of the public directory, and a missing entry fails loudly at the
+  // first import instead of silently exposing a path.
+  ...Object.fromEntries(
+    ["app", "router", "fmt", "charts", "data",
+     "view-overview", "view-experiments", "view-messages", "view-coverage"]
+      .map((n) => [`/${n}.js`, { file: `${n}.js`, type: "text/javascript; charset=utf-8" }]),
+  ),
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
