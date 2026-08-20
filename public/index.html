@@ -4,56 +4,85 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Communications Hub</title>
+  <meta name="color-scheme" content="light dark" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/doorloop-logo.svg" />
 </head>
 <body>
-  <header>
-    <div class="brand">
+  <!-- Icon sprite. Inline so there is no second request and no CDN — the whole
+       app is one HTML + one CSS + one JS, which is also what keeps it working
+       behind a strict CSP. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <g id="i-pulse"><path d="M2 8h3l2-5 3 10 2-5h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <g id="i-flask"><path d="M6 2h4M7 2v4L3.5 12A1.5 1.5 0 0 0 5 14.5h6A1.5 1.5 0 0 0 12.5 12L9 6V2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <g id="i-chat"><path d="M14 8.5c0 2.8-2.7 5-6 5-.9 0-1.7-.1-2.4-.4L2.5 14l.8-2.4A4.7 4.7 0 0 1 2 8.5c0-2.8 2.7-5 6-5s6 2.2 6 5Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></g>
+      <g id="i-health"><path d="M8 14s5.5-3.2 5.5-7A3.5 3.5 0 0 0 8 4.2 3.5 3.5 0 0 0 2.5 7c0 3.8 5.5 7 5.5 7Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></g>
+      <g id="i-mail"><rect x="2" y="3.5" width="12" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m2.6 4.6 5.4 4 5.4-4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></g>
+      <g id="i-sms"><rect x="2" y="2.5" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 6.5h6M5 9.5h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></g>
+      <g id="i-check"><path d="m3 8.5 3.2 3L13 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <g id="i-alert"><path d="M8 2.5 14.5 13.5h-13L8 2.5Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.6" r=".85" fill="currentColor"/></g>
+      <g id="i-clock"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3.3l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></g>
+      <g id="i-chev"><path d="m6 4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <g id="i-back"><path d="m9.5 4-4 4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <g id="i-refresh"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.6V5.4h-2.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <g id="i-theme"><circle cx="8" cy="8" r="3.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></g>
+      <g id="i-reply"><path d="M6.5 4 3 7.5l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 7.5h6.5A3.5 3.5 0 0 1 13 11v1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></g>
+      <g id="i-info"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.3v3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="5.1" r=".85" fill="currentColor"/></g>
+      <g id="i-archive"><rect x="2" y="3" width="12" height="3" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3.2 6v6.5A1.5 1.5 0 0 0 4.7 14h6.6a1.5 1.5 0 0 0 1.5-1.5V6M6.5 9h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></g>
+    </defs>
+  </svg>
+
+  <div class="app">
+    <div class="brandbox">
       <img src="/doorloop-logo.svg" alt="DoorLoop" class="logo" />
-      <div>
-      <h1>Communications Hub</h1>
-      <p class="sub" id="subtitle">Show-rate &amp; A/B confidence per objective · updates hourly from Salesforce</p>
-      </div>
+      <span class="wordmark">Comms Hub</span>
     </div>
-    <div class="status">
-      <span id="updated" class="muted">—</span>
-      <button id="refresh" title="Refresh now">↻</button>
-    </div>
-  </header>
 
-  <nav class="tabs" role="tablist">
-    <button role="tab" class="tab active" data-tab="experiments" aria-selected="true">Experiments</button>
-    <button role="tab" class="tab" data-tab="ledger" aria-selected="false">Ledger</button>
-  </nav>
+    <header class="topbar">
+      <h1 id="page-title">Overview</h1>
+      <span class="spacer"></span>
+      <span id="updated" class="tiny muted nowrap">—</span>
+      <button id="theme" class="btn ghost icon-only" title="Toggle light / dark" aria-label="Toggle theme">
+        <svg class="icon" width="16" height="16"><use href="#i-theme"/></svg>
+      </button>
+      <button id="refresh" class="btn ghost icon-only" title="Refresh data" aria-label="Refresh">
+        <svg class="icon" width="16" height="16"><use href="#i-refresh"/></svg>
+      </button>
+    </header>
 
-  <div id="banner" class="banner" hidden></div>
+    <nav class="rail" aria-label="Sections">
+      <div class="rail-label">Review</div>
+      <button class="navitem" data-route="overview">
+        <svg class="icon" width="16" height="16"><use href="#i-pulse"/></svg> Overview
+      </button>
+      <button class="navitem" data-route="experiments">
+        <svg class="icon" width="16" height="16"><use href="#i-flask"/></svg> Experiments
+        <span class="count" id="nav-exp-count"></span>
+      </button>
+      <button class="navitem" data-route="messages">
+        <svg class="icon" width="16" height="16"><use href="#i-chat"/></svg> Messages
+      </button>
+      <button class="navitem" data-route="coverage">
+        <svg class="icon" width="16" height="16"><use href="#i-health"/></svg> Coverage
+        <span class="count" id="nav-cov-count"></span>
+      </button>
 
-  <main id="objectives" aria-busy="true"></main>
+      <div class="rail-label">Saved views</div>
+      <button class="navitem" data-href="#/messages?channel=sms&amp;replied=true">
+        <svg class="icon" width="16" height="16"><use href="#i-reply"/></svg> SMS replies
+      </button>
+      <button class="navitem" data-href="#/messages?variant_key=DemoDriver-SMS-MorningOf-D-GPT5">
+        <svg class="icon" width="16" height="16"><use href="#i-sms"/></svg> Variant D sends
+      </button>
+      <button class="navitem" data-href="#/messages?variant_key=DemoDriver-SMS-MorningOf-A-GPT5">
+        <svg class="icon" width="16" height="16"><use href="#i-sms"/></svg> Variant A sends
+      </button>
+    </nav>
 
-  <main id="ledger" hidden>
-    <div class="ledger-toolbar">
-      <form id="person-form" autocomplete="off">
-        <select id="person-type" aria-label="Identifier type">
-          <option value="email">email</option>
-          <option value="sf_lead">sf_lead</option>
-          <option value="hubspot_contact">hubspot_contact</option>
-          <option value="outreach_prospect">outreach_prospect</option>
-          <option value="phone">phone</option>
-        </select>
-        <input id="person-value" type="text" placeholder="look up a person…" aria-label="Identifier value" />
-        <button type="submit">Search</button>
-      </form>
-      <button id="ledger-back" hidden>← back to coverage</button>
-    </div>
-    <div id="ledger-body" aria-busy="true"></div>
-  </main>
+    <main id="view" aria-busy="true"></main>
+  </div>
 
-  <footer class="muted" id="footnote">
-    Bayesian P(best) · winner declared at each objective's confidence threshold ·
-    rates = Show / (Show + No-Show + Canceled + Rescheduled)
-  </footer>
-
-  <script src="/app.js"></script>
-  <script src="/ledger.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

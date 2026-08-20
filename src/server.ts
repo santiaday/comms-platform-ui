@@ -23,12 +23,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  fetchObjectiveMetrics, fetchEmailEngagement, assembleExperiments, IDENTITY, MetricsError,
+  fetchObjectiveMetrics, fetchEmailEngagement, fetchPulse, assembleExperiments, IDENTITY, MetricsError,
   type EndpointConfig,
 } from "./metrics-client.js";
 import {
   resolveLedgerConfig, fetchLedger, isKnownRoute, LedgerError,
 } from "./ledger-client.js";
+import { enrichLedgerBody } from "./ledger-enrich.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, "..", "public");
@@ -37,10 +38,17 @@ const PORT = Number(process.env["PORT"] ?? "8080");
 const STATIC: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
-  "/ledger.js": { file: "ledger.js", type: "text/javascript; charset=utf-8" },
   "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
   "/doorloop-logo.svg": { file: "doorloop-logo.svg", type: "image/svg+xml" },
+  // The front end is an ES module graph loaded from /app.js. Every module is
+  // listed explicitly rather than served by pattern: an allowlist cannot be
+  // walked out of the public directory, and a missing entry fails loudly at the
+  // first import instead of silently exposing a path.
+  ...Object.fromEntries(
+    ["app", "router", "fmt", "charts", "data",
+     "view-overview", "view-experiments", "view-messages", "view-coverage"]
+      .map((n) => [`/${n}.js`, { file: `${n}.js`, type: "text/javascript; charset=utf-8" }]),
+  ),
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -95,7 +103,10 @@ const server = createServer(async (req, res) => {
       // Pass the upstream status through, except 5xx: the DeployBay gateway
       // rewrites those into an opaque HTML page, hiding the real reason.
       const status = upstream.status >= 500 ? 200 : upstream.status;
-      return sendJson(res, status, upstream.body);
+      // Attach the derived fields (short variant names, coverage flag hints)
+      // here rather than in the browser, so naming.ts and ledger-client.ts stay
+      // the single tested source of truth for both.
+      return sendJson(res, status, enrichLedgerBody(route, upstream.body));
     } catch (err) {
       const msg = err instanceof LedgerError ? err.message : err instanceof Error ? err.message : String(err);
       return sendJson(res, 200, { ok: false, error: `ledger query failed: ${msg}` });
@@ -120,12 +131,21 @@ const server = createServer(async (req, res) => {
       } catch (e) {
         engagement_error = e instanceof Error ? e.message : String(e);
       }
+      // Volume for the header strip. Best-effort like engagement: the page must
+      // still render its experiments if this one query fails.
+      let pulse: unknown[] = [];
+      let pulse_error: string | undefined;
+      try {
+        pulse = await fetchPulse(cfg);
+      } catch (e) {
+        pulse_error = e instanceof Error ? e.message : String(e);
+      }
       // Experiment-shaped grouping is what the UI renders; the flat arrays stay
       // in the payload so nothing that consumed them breaks.
       const programs = assembleExperiments(objectives, engagement as never[]);
       return sendJson(res, 200, {
         ok: true, computed_at: new Date().toISOString(),
-        programs, objectives, engagement, engagement_error,
+        programs, objectives, engagement, engagement_error, pulse, pulse_error,
       });
     } catch (err) {
       const msg = err instanceof MetricsError ? err.message : err instanceof Error ? err.message : String(err);
