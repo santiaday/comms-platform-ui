@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { assemble, assembleEngagement } from "../src/metrics-client.js";
+import { assemble, assembleEngagement, isArmLive } from "../src/metrics-client.js";
 import { computeConfidence } from "../src/confidence.js";
 
 const erow = (o: Partial<any>) => ({
@@ -127,6 +127,9 @@ const rrow = (o: Partial<any>) => ({
   n_attained: 10, n_failed: 10, n_pending: 0, n_denominator: 20,
   wilson_low: null, wilson_high: null, confidence_threshold: 0.95,
   variant_live: true, experiment_live: true, experiment_status: "running",
+  // A registered arm is the default fixture; the unregistered case is the
+  // exception and each test that wants it says so explicitly.
+  variant_registered: true, experiment_registered: true, last_sent_at: null,
   arm: "a", arm_split_pct: "50",
   ...o,
 });
@@ -149,7 +152,11 @@ describe("variant live-ness", () => {
   it("keeps unregistered historical variants rather than dropping their history", () => {
     // The 18 fragmented Demo Driver email keys predate comms.variations, so they
     // join to NULL. They must survive as not-live, not vanish.
-    const out = assemble([rrow({ variant_key: "OLD", variant_live: null, experiment_live: null, arm: null, arm_split_pct: null })]);
+    const out = assemble([rrow({
+      variant_key: "OLD", variant_registered: false, experiment_registered: false,
+      variant_live: null, experiment_live: null, arm: null, arm_split_pct: null,
+      last_sent_at: null,   // never sent, so the recency fallback says not live
+    })]);
     assert.equal(out[0]!.variants.length, 1);
     assert.equal(out[0]!.variants[0]!.live, false);
     assert.equal(out[0]!.variants[0]!.arm, null);
@@ -160,5 +167,53 @@ describe("variant live-ness", () => {
     assert.equal(assemble([rrow({ arm_split_pct: "50" })])[0]!.variants[0]!.split_pct, 50);
     assert.equal(assemble([rrow({ arm_split_pct: "" })])[0]!.variants[0]!.split_pct, null);
     assert.equal(assemble([rrow({ arm_split_pct: "null" })])[0]!.variants[0]!.split_pct, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live-ness. This got the definition wrong once in a way that made the whole
+// Experiments page useless: `is_active` is NULL for every arm that predates
+// comms.variations, and treating NULL as false marked all 18 Demo Driver email
+// experiments retired on a day they sent 49 emails. The page rendered
+// "Nothing running in this program right now" above 4,111 decided outcomes.
+// ---------------------------------------------------------------------------
+describe("isArmLive", () => {
+  const NOW = Date.parse("2026-08-20T12:00:00Z");
+  const ago = (days: number) => new Date(NOW - days * 86_400_000).toISOString();
+
+  it("trusts the registry when the arm is registered", () => {
+    assert.equal(isArmLive({ variant_registered: true, variant_live: true,
+      experiment_registered: true, experiment_live: true } as never, NOW), true);
+    assert.equal(isArmLive({ variant_registered: true, variant_live: false,
+      experiment_registered: true, experiment_live: true } as never, NOW), false);
+  });
+
+  it("keeps a retired arm retired even if it sent this morning", () => {
+    // SMS variant C: retired by decision, last send hours earlier. An
+    // observation must not overturn the decision.
+    assert.equal(isArmLive({ variant_registered: true, variant_live: false,
+      experiment_registered: true, experiment_live: true,
+      last_sent_at: ago(0.2) } as never, NOW), false);
+  });
+
+  it("treats an active arm in a paused experiment as not sending", () => {
+    assert.equal(isArmLive({ variant_registered: true, variant_live: true,
+      experiment_registered: true, experiment_live: false } as never, NOW), false);
+  });
+
+  it("does not punish an active arm whose experiment was never registered", () => {
+    assert.equal(isArmLive({ variant_registered: true, variant_live: true,
+      experiment_registered: false, experiment_live: false } as never, NOW), true);
+  });
+
+  it("falls back to recent sends when nothing was ever registered", () => {
+    assert.equal(isArmLive({ variant_registered: false, last_sent_at: ago(1) } as never, NOW), true);
+    assert.equal(isArmLive({ variant_registered: false, last_sent_at: ago(13.9) } as never, NOW), true);
+    assert.equal(isArmLive({ variant_registered: false, last_sent_at: ago(30) } as never, NOW), false);
+  });
+
+  it("an unregistered arm that never sent is not live", () => {
+    assert.equal(isArmLive({ variant_registered: false, last_sent_at: null } as never, NOW), false);
+    assert.equal(isArmLive({ variant_registered: false, last_sent_at: "not a date" } as never, NOW), false);
   });
 });

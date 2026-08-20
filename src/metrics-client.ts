@@ -55,6 +55,10 @@ export interface ComponentMetric {
   experiment_status: string | null;
   /** How many of these variants are actually sending right now. 0 = archive. */
   live_variants: number;
+  /** Channel these sends went out on, for a chip on the card. */
+  channel: string | null;
+  /** Most recent send across this component's arms. */
+  last_sent_at: string | null;
 }
 
 export interface EndpointConfig {
@@ -76,9 +80,50 @@ interface RateRow {
   variant_live?: boolean | null;
   experiment_live?: boolean | null;
   experiment_status?: string | null;
+  /** Whether this variant/experiment exists in the registry at all. */
+  variant_registered?: boolean | null;
+  experiment_registered?: boolean | null;
+  /** Most recent send for this arm — the fallback signal for "still running". */
+  last_sent_at?: string | null;
+  channel?: string | null;
   arm?: string | null;
   /** jsonb -> text, so it arrives as a string like "50". */
   arm_split_pct?: string | null;
+}
+
+/**
+ * How recently an unregistered arm must have sent to count as still running.
+ *
+ * Only used when the registry has nothing to say. Two weeks is wide enough to
+ * survive a quiet weekend or a paused sequence without declaring a working
+ * program dead, and short enough that a genuinely finished test drops out.
+ */
+export const LIVE_WINDOW_DAYS = 14;
+
+/**
+ * Is this arm currently sending?
+ *
+ * Registration is authoritative when it exists: SMS arms B and C are retired
+ * because someone retired them, and C sent as recently as this morning — an
+ * observation must not overturn that decision.
+ *
+ * When an arm was never registered, though, `is_active` is absent rather than
+ * false, and treating absent as "retired" was flatly wrong: it marked all 18
+ * Demo Driver email experiments dormant on a day they sent 49 emails, and the
+ * Experiments page rendered "Nothing running in this program right now" over
+ * 4,111 decided outcomes. With no decision on record, recent sends are the
+ * best evidence available.
+ */
+export function isArmLive(r: RateRow, now: number = Date.now()): boolean {
+  if (r.variant_registered) {
+    // A live arm inside a paused experiment is not sending either — but only
+    // hold that against it when the experiment is actually registered.
+    return !!r.variant_live && (!r.experiment_registered || !!r.experiment_live);
+  }
+  if (!r.last_sent_at) return false;
+  const t = new Date(r.last_sent_at).getTime();
+  if (!Number.isFinite(t)) return false;
+  return now - t <= LIVE_WINDOW_DAYS * 86_400_000;
 }
 
 // Live-ness is joined in, not inferred. comms.v_objective_rates is historical by
@@ -101,6 +146,10 @@ const SQL = `
          COALESCE(v.is_active, false)                      AS variant_live,
          COALESCE(x.status = 'running', false)             AS experiment_live,
          x.status                                          AS experiment_status,
+         (v.variation_key  IS NOT NULL)                    AS variant_registered,
+         (x.experiment_key IS NOT NULL)                    AS experiment_registered,
+         act.last_sent_at                                  AS last_sent_at,
+         act.channel                                       AS channel,
          v.arm                                             AS arm,
          (x.intended_split -> v.arm)::text                 AS arm_split_pct
     FROM comms.v_objective_rates r
@@ -108,6 +157,18 @@ const SQL = `
       ON o.objective_key = r.objective_key AND o.version = r.objective_version
     LEFT JOIN comms.variations  v ON v.variation_key  = r.variant_key
     LEFT JOIN comms.experiments x ON x.experiment_key = r.experiment_key
+    LEFT JOIN (
+           SELECT objective_key, objective_version, rank, experiment_key, variant_key,
+                  max(sent_at)                              AS last_sent_at,
+                  mode() WITHIN GROUP (ORDER BY channel)     AS channel
+             FROM comms.v_objective_attainment
+            GROUP BY 1, 2, 3, 4, 5
+         ) act
+      ON  act.objective_key     =            r.objective_key
+      AND act.objective_version =            r.objective_version
+      AND act.rank              =            r.rank
+      AND act.experiment_key    IS NOT DISTINCT FROM r.experiment_key
+      AND act.variant_key       IS NOT DISTINCT FROM r.variant_key
    ORDER BY r.objective_key, r.objective_version, r.rank, r.experiment_key, r.variant_key`;
 
 // ---------------------------------------------------------------------
@@ -267,9 +328,7 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
         wilson_low: r.wilson_low ?? null,
         wilson_high: r.wilson_high ?? null,
         prob_best: round4(probByKey.get(r.variant_key ?? "(none)") ?? 0),
-        // Live means BOTH the variation is active AND its experiment is running:
-        // an active variation inside a paused experiment is not sending either.
-        live: !!r.variant_live && !!r.experiment_live,
+        live: isArmLive(r),
         arm: r.arm ?? null,
         split_pct: r.arm_split_pct == null || r.arm_split_pct === ""
           ? null
@@ -279,7 +338,10 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
       prob_leader_best: round4(conf.prob_leader_best),
       conclusive: conf.conclusive,
       experiment_status: first.experiment_status ?? null,
-      live_variants: arms.filter((r) => !!r.variant_live && !!r.experiment_live).length,
+      channel: arms.find((r) => r.channel)?.channel ?? null,
+      last_sent_at: arms.reduce<string | null>(
+        (m, r) => (r.last_sent_at && (!m || r.last_sent_at > m) ? r.last_sent_at : m), null),
+      live_variants: arms.filter((r) => isArmLive(r)).length,
     });
   }
   return out.sort((a, b) => a.objective_key.localeCompare(b.objective_key) || a.rank - b.rank
@@ -382,4 +444,51 @@ export function assembleExperiments(
   });
   groups.sort((a, b) => b.total_decided - a.total_decided);
   return groups;
+}
+
+// ---------------------------------------------------------------------
+// Pulse — 14 days of volume, so the top of the page answers "what has
+// actually been going out, and is anyone answering" before you read a
+// single experiment card.
+//
+// Deliberately counts SENDS THAT DREW A REPLY rather than reply events.
+// On 2026-08-20 variant C produced 10 reply events from 3 people while
+// variant A produced 5 from 5 — on raw events C looked twice as engaging
+// when it was actually confusing people into a back-and-forth. Distinct
+// replied-sends is the honest denominator.
+// ---------------------------------------------------------------------
+export interface PulseDay {
+  day: string;
+  channel: string;
+  sends: number;
+  replied_sends: number;
+}
+
+const PULSE_SQL = `
+  SELECT date_trunc('day', COALESCE(c.sent_at, c.ingested_at))::date::text AS day,
+         c.channel,
+         count(*)::int                           AS sends,
+         count(DISTINCT e.communication_id)::int AS replied_sends
+    FROM comms.communications c
+    LEFT JOIN comms.events e
+      ON e.communication_id = c.communication_id AND e.event_type = 'replied'
+   WHERE COALESCE(c.sent_at, c.ingested_at) >= (now() - interval '13 days')::date
+     AND c.direction = 'outbound'
+   GROUP BY 1, 2
+   ORDER BY 1, 2`;
+
+export async function fetchPulse(cfg: EndpointConfig): Promise<PulseDay[]> {
+  const resp = await fetch(cfg.endpointUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", "X-Identity": cfg.identity, "X-Internal-Secret": cfg.bearer },
+    body: JSON.stringify({ sql: PULSE_SQL, params: [] }),
+  });
+  const text = await resp.text();
+  if (!resp.ok) throw new MetricsError(`pulse endpoint ${resp.status}: ${text.slice(0, 300)}`);
+  let json: { ok?: boolean; rows?: PulseDay[]; error?: unknown };
+  try { json = JSON.parse(text); } catch { throw new MetricsError(`bad pulse JSON: ${text.slice(0, 200)}`); }
+  if (json.ok !== true || !Array.isArray(json.rows)) {
+    throw new MetricsError(`pulse endpoint error: ${JSON.stringify(json.error ?? json).slice(0, 300)}`);
+  }
+  return json.rows;
 }
