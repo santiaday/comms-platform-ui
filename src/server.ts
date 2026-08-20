@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   fetchObjectiveMetrics, fetchEmailEngagement, fetchPulse, assembleExperiments, IDENTITY, MetricsError,
+  QUERY_FINGERPRINT,
   type EndpointConfig,
 } from "./metrics-client.js";
 import {
@@ -86,6 +87,10 @@ const server = createServer(async (req, res) => {
       configured: !!process.env["COMMS_WRITER_BEARER"] && !!process.env["QUERY_ENDPOINT_URL"],
       ledger_configured:
         !!process.env["LEDGER_API_URL"] && !!process.env["LEDGER_BEARER"],
+      // Identifies WHICH queries this build runs, so "is the fix deployed?" is
+      // answerable without reading the dashboard. Safe to expose: it is a hash,
+      // not the SQL, and it reveals nothing about the schema.
+      queries: QUERY_FINGERPRINT,
     });
   }
 

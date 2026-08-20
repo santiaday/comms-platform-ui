@@ -3,6 +3,7 @@
 // Bayesian confidence. One parameterless SELECT over comms.v_objective_rates +
 // comms.objectives; the reader bearer is injected server-side, never exposed.
 
+import { createHash } from "node:crypto";
 import { computeConfidence } from "./confidence.js";
 import { shortVariant } from "./naming.js";
 
@@ -482,6 +483,23 @@ const PULSE_SQL = `
   SELECT day::text AS day, channel, sends, replied_sends
     FROM comms.v_send_pulse
    ORDER BY 1, 2`;
+
+/**
+ * Fingerprint of the SQL this build will actually run.
+ *
+ * When the dashboard 403s, the first question is "is the fix deployed?" — and
+ * answering it by squinting at the UI is guesswork. It cost a full round trip
+ * once: the migration granting the new views was applied, the SQL that used
+ * them was committed, and the running artifact was still the build that joined
+ * comms.experiments directly, so the error was identical and nothing about it
+ * said which half was stale.
+ *
+ * Exposed on /api/health, so "which queries are live" is a curl and not a guess.
+ */
+export const QUERY_FINGERPRINT: string = createHash("sha256")
+  .update([SQL, ENGAGEMENT_SQL, PULSE_SQL].join("\u0000"))
+  .digest("hex")
+  .slice(0, 12);
 
 export async function fetchPulse(cfg: EndpointConfig): Promise<PulseDay[]> {
   const resp = await fetch(cfg.endpointUrl, {
