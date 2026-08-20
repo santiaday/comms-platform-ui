@@ -16,6 +16,11 @@ const FORWARDABLE: Readonly<Record<string, readonly string[]>> = {
     "channel",
     "direction",
     "experiment_key",
+    // Exact-variant and reply filters: "every send of variant D", "only the
+    // ones that got a reply". Filtering a page in the browser silently lies as
+    // soon as the page cuts off, so both are pushed upstream.
+    "variant_key",
+    "replied",
     "recipient_id",
     "from",
     "to",
@@ -23,6 +28,9 @@ const FORWARDABLE: Readonly<Record<string, readonly string[]>> = {
     "cursor_sent_at",
     "cursor_id",
   ],
+  // The whole conversation for one message. Takes no query params — the
+  // communication_id in the path is the entire input.
+  thread: [],
   person: ["recipient_id", "id_type", "id_value"],
 };
 
@@ -77,7 +85,7 @@ export function buildLedgerUrl(
 /** True for the routes this proxy is willing to serve. */
 export function isKnownRoute(route: string): boolean {
   if (route === "coverage" || route === "messages" || route === "person") return true;
-  return /^message\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(route);
+  return /^(message|thread)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(route);
 }
 
 /**

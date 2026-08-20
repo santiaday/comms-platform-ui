@@ -112,3 +112,53 @@ describe("assemble drops the (none) / untagged arm", () => {
     assert.ok(Math.abs(total - 1) < 0.02, `P(best) should sum to ~1, got ${total}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Live-ness. comms.v_objective_rates is historical by design — every variant
+// that ever sent keeps its row forever — so "is this still running" has to be
+// joined in, and the Hub hides the dormant ones by default. Getting this wrong
+// is what put retired SMS arms B and C beside the running A and D, looking
+// identical, with no way to tell which mattered.
+// ---------------------------------------------------------------------------
+const rrow = (o: Partial<any>) => ({
+  objective_key: "demo_driver_morning_sms", objective_version: 1, rank: 1, label: "primary",
+  outcome_type: "demo_showed", eval_mode: "disposition",
+  experiment_key: "DemoDriver-SMS-MorningOf", variant_key: "DemoDriver-SMS-MorningOf-A-GPT5",
+  n_attained: 10, n_failed: 10, n_pending: 0, n_denominator: 20,
+  wilson_low: null, wilson_high: null, confidence_threshold: 0.95,
+  variant_live: true, experiment_live: true, experiment_status: "running",
+  arm: "a", arm_split_pct: "50",
+  ...o,
+});
+
+describe("variant live-ness", () => {
+  it("live requires BOTH an active variation and a running experiment", () => {
+    const out = assemble([
+      rrow({ variant_key: "A", arm: "a" }),
+      rrow({ variant_key: "B", arm: "b", variant_live: false }),                     // retired arm
+      rrow({ variant_key: "P", arm: "p", experiment_live: false, experiment_status: "paused" }),
+    ]);
+    const by = new Map(out[0]!.variants.map((v) => [v.variant_key, v]));
+    assert.equal(by.get("A")!.live, true);
+    assert.equal(by.get("B")!.live, false, "an inactive variation is not live");
+    assert.equal(by.get("P")!.live, false,
+      "an active variation inside a paused experiment is not sending either");
+    assert.equal(out[0]!.live_variants, 1);
+  });
+
+  it("keeps unregistered historical variants rather than dropping their history", () => {
+    // The 18 fragmented Demo Driver email keys predate comms.variations, so they
+    // join to NULL. They must survive as not-live, not vanish.
+    const out = assemble([rrow({ variant_key: "OLD", variant_live: null, experiment_live: null, arm: null, arm_split_pct: null })]);
+    assert.equal(out[0]!.variants.length, 1);
+    assert.equal(out[0]!.variants[0]!.live, false);
+    assert.equal(out[0]!.variants[0]!.arm, null);
+    assert.equal(out[0]!.variants[0]!.split_pct, null);
+  });
+
+  it("parses the arm's traffic share from jsonb text, and tolerates junk", () => {
+    assert.equal(assemble([rrow({ arm_split_pct: "50" })])[0]!.variants[0]!.split_pct, 50);
+    assert.equal(assemble([rrow({ arm_split_pct: "" })])[0]!.variants[0]!.split_pct, null);
+    assert.equal(assemble([rrow({ arm_split_pct: "null" })])[0]!.variants[0]!.split_pct, null);
+  });
+});
