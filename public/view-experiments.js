@@ -124,7 +124,7 @@ function expCard(card, isArchive, expanded = !isArchive) {
           ${card.experiment_key ? `<span class="chip mono">${esc(card.experiment_key)}</span>`
             : `<span class="chip warn" title="No experiment registered — these sends cannot be compared">untagged</span>`}
           ${live.length ? `<span class="chip ok">${plural(live.length, "live arm")}</span>`
-            : `<span class="chip" title="${primary?.last_sent_at ? `last sent ${new Date(primary.last_sent_at).toLocaleString()}` : "no sends recorded"}">
+            : `<span class="chip" title="${esc(primary?.last_sent_at ? `last sent ${new Date(primary.last_sent_at).toLocaleString()}` : "no sends recorded")}">
                  ${primary?.last_sent_at ? `last sent ${esc(timeAgo(primary.last_sent_at))}` : "no sends"}</span>`}
           ${primary?.experiment_status && primary.experiment_status !== "running"
             ? `<span class="chip warn">${esc(primary.experiment_status)}</span>` : ""}
