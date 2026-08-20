@@ -3,6 +3,7 @@
 // Bayesian confidence. One parameterless SELECT over comms.v_objective_rates +
 // comms.objectives; the reader bearer is injected server-side, never exposed.
 
+import { createHash } from "node:crypto";
 import { computeConfidence } from "./confidence.js";
 import { shortVariant } from "./naming.js";
 
@@ -136,6 +137,12 @@ export function isArmLive(r: RateRow, now: number = Date.now()): boolean {
 // comms.variations at all (the 18 fragmented Demo Driver email keys predate it).
 // Those come back NULL, which the assembler treats as "not currently running"
 // rather than dropping the row and losing the history.
+//
+// Liveness comes from comms.v_variant_liveness / v_experiment_status, NOT from
+// comms.experiments directly. comms_writer holds no SELECT on that table, so
+// joining it produced a 403 and a dashboard that was one red banner. Migration
+// 0076 added those two views for exactly this query. Anything added here has to
+// be readable by comms_writer — test/query-grants.test.ts enforces it.
 const SQL = `
   SELECT r.objective_key, r.objective_version, r.rank, r.label, r.outcome_type, r.eval_mode,
          r.experiment_key, r.variant_key,
@@ -143,20 +150,20 @@ const SQL = `
          r.n_pending::int AS n_pending, r.n_denominator::int AS n_denominator,
          r.wilson_low::float8 AS wilson_low, r.wilson_high::float8 AS wilson_high,
          o.confidence_threshold::float8 AS confidence_threshold,
-         COALESCE(v.is_active, false)                      AS variant_live,
-         COALESCE(x.status = 'running', false)             AS experiment_live,
-         x.status                                          AS experiment_status,
-         (v.variation_key  IS NOT NULL)                    AS variant_registered,
-         (x.experiment_key IS NOT NULL)                    AS experiment_registered,
-         act.last_sent_at                                  AS last_sent_at,
-         act.channel                                       AS channel,
-         v.arm                                             AS arm,
-         (x.intended_split -> v.arm)::text                 AS arm_split_pct
+         COALESCE(lv.variant_is_active, false)             AS variant_live,
+         COALESCE(xs.is_running, false)                     AS experiment_live,
+         xs.status                                          AS experiment_status,
+         (lv.variant_key    IS NOT NULL)                    AS variant_registered,
+         (xs.experiment_key IS NOT NULL)                    AS experiment_registered,
+         act.last_sent_at                                   AS last_sent_at,
+         act.channel                                        AS channel,
+         lv.arm                                             AS arm,
+         lv.arm_split_pct                                   AS arm_split_pct
     FROM comms.v_objective_rates r
     JOIN comms.objectives o
       ON o.objective_key = r.objective_key AND o.version = r.objective_version
-    LEFT JOIN comms.variations  v ON v.variation_key  = r.variant_key
-    LEFT JOIN comms.experiments x ON x.experiment_key = r.experiment_key
+    LEFT JOIN comms.v_variant_liveness  lv ON lv.variant_key    = r.variant_key
+    LEFT JOIN comms.v_experiment_status xs ON xs.experiment_key = r.experiment_key
     LEFT JOIN (
            SELECT objective_key, objective_version, rank, experiment_key, variant_key,
                   max(sent_at)                              AS last_sent_at,
@@ -468,18 +475,31 @@ export interface PulseDay {
   replied_sends: number;
 }
 
+// Reads comms.v_send_pulse rather than comms.communications + comms.events:
+// comms_writer has SELECT on neither base table, and a dashboard that needs a
+// daily count should not be handed the whole message ledger to get it. The
+// aggregation and the 14-day window live in the view (migration 0076).
 const PULSE_SQL = `
-  SELECT date_trunc('day', COALESCE(c.sent_at, c.ingested_at))::date::text AS day,
-         c.channel,
-         count(*)::int                           AS sends,
-         count(DISTINCT e.communication_id)::int AS replied_sends
-    FROM comms.communications c
-    LEFT JOIN comms.events e
-      ON e.communication_id = c.communication_id AND e.event_type = 'replied'
-   WHERE COALESCE(c.sent_at, c.ingested_at) >= (now() - interval '13 days')::date
-     AND c.direction = 'outbound'
-   GROUP BY 1, 2
+  SELECT day::text AS day, channel, sends, replied_sends
+    FROM comms.v_send_pulse
    ORDER BY 1, 2`;
+
+/**
+ * Fingerprint of the SQL this build will actually run.
+ *
+ * When the dashboard 403s, the first question is "is the fix deployed?" — and
+ * answering it by squinting at the UI is guesswork. It cost a full round trip
+ * once: the migration granting the new views was applied, the SQL that used
+ * them was committed, and the running artifact was still the build that joined
+ * comms.experiments directly, so the error was identical and nothing about it
+ * said which half was stale.
+ *
+ * Exposed on /api/health, so "which queries are live" is a curl and not a guess.
+ */
+export const QUERY_FINGERPRINT: string = createHash("sha256")
+  .update([SQL, ENGAGEMENT_SQL, PULSE_SQL].join("\u0000"))
+  .digest("hex")
+  .slice(0, 12);
 
 export async function fetchPulse(cfg: EndpointConfig): Promise<PulseDay[]> {
   const resp = await fetch(cfg.endpointUrl, {
