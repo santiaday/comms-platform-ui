@@ -1,0 +1,9 @@
+# TypeScript is text. metrics-client.ts once carried raw NUL bytes as a group-key
+# separator, which made git classify it binary and render its diff as "Binary file
+# not shown" — on the file with the most logic in it. The bytes are gone, but this
+# keeps a stray one from ever hiding a diff again.
+*.ts   text diff
+*.js   text diff
+*.css  text diff
+*.html text diff
+*.md   text diff
