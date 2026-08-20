@@ -280,8 +280,12 @@ export function assembleEngagement(rows: EngagementRow[]): EngagementExperiment[
   return [...groups.values()].sort((a, b) => (a.experiment_key ?? "").localeCompare(b.experiment_key ?? ""));
 }
 
+// NUL as the separator, written as an escape rather than an embedded byte:
+// a raw NUL makes git treat this whole file as binary, and the diff on the
+// file with the most logic in it renders as "Binary file not shown".
+const SEP = "\u0000";
 const groupKey = (r: RateRow) =>
-  `${r.objective_key} ${r.objective_version} ${r.rank} ${r.experiment_key ?? ""}`;
+  [r.objective_key, r.objective_version, r.rank, r.experiment_key ?? ""].join(SEP);
 
 export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
   const groups = new Map<string, RateRow[]>();
