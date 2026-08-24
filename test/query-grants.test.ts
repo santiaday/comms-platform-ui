@@ -38,6 +38,11 @@ const READABLE_BY_COMMS_WRITER = new Set([
   "comms.v_variant_liveness",
   "comms.v_experiment_status",
   "comms.v_send_pulse",
+  // Added by migration 0078. Verified with has_table_privilege before listing:
+  // an experiment is a sequence of comparisons, and these scope each rate to
+  // the window its arms actually ran together.
+  "comms.v_experiment_phases",
+  "comms.v_objective_rates_phased",
 ]);
 
 // Relations comms_writer must NEVER be asked for. Listed so a regression gets a
@@ -106,16 +111,19 @@ describe("every queried relation is readable by comms_writer", () => {
     assert.deepEqual(found, [
       "comms.objectives",
       "comms.v_email_engagement",
+      "comms.v_experiment_phases",
       "comms.v_experiment_status",
       "comms.v_objective_attainment",
-      "comms.v_objective_rates",
+      "comms.v_objective_rates_phased",
       "comms.v_send_pulse",
       "comms.v_variant_liveness",
     ]);
     // The three queries between them must still reach the rates, the objectives
     // and the liveness views — if any of these vanished, something was rewritten
     // and the allowlist needs re-checking rather than silently passing.
-    for (const required of ["comms.v_objective_rates", "comms.objectives", "comms.v_variant_liveness"]) {
+    // v_objective_rates was replaced by v_objective_rates_phased in 0078: an
+    // experiment is a sequence of comparisons, and the unphased view pools them.
+    for (const required of ["comms.v_objective_rates_phased", "comms.objectives", "comms.v_variant_liveness"]) {
       assert.ok(found.includes(required), `expected ${required} to still be queried; found: ${found.join(", ")}`);
     }
   });
