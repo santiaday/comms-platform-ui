@@ -60,6 +60,14 @@ export interface ComponentMetric {
   channel: string | null;
   /** Most recent send across this component's arms. */
   last_sent_at: string | null;
+  /** Which comparison this component belongs to (see RateRow.phase_no). */
+  phase_no: number;
+  phase_label: string | null;
+  phase_from: string | null;
+  /** null while the comparison is still running. */
+  phase_to: string | null;
+  phase_is_current: boolean;
+  phase_is_comparison: boolean;
 }
 
 export interface EndpointConfig {
@@ -90,6 +98,25 @@ interface RateRow {
   arm?: string | null;
   /** jsonb -> text, so it arrives as a string like "50". */
   arm_split_pct?: string | null;
+
+  /**
+   * Which comparison this row belongs to.
+   *
+   * An experiment is not one lifetime test; it is a sequence of them against a
+   * shared control. DemoDriver-SMS-MorningOf ran A vs B, then A vs C, then
+   * A vs D. Pooling them rendered "A 45.4% vs D 56.6%" — an 11.2pp gap — when
+   * the gap inside the window where both were live is 4.3pp. The rest was arm
+   * A's own baseline moving (34.5% to 52.0% week over week) while D happened to
+   * launch into its strongest stretch.
+   */
+  phase_no?: number | null;
+  phase_label?: string | null;
+  phase_from?: string | null;
+  /** null while the phase is still running. */
+  phase_to?: string | null;
+  phase_is_current?: boolean | null;
+  phase_n_arms?: number | null;
+  phase_is_comparison?: boolean | null;
 }
 
 /**
@@ -158,8 +185,15 @@ const SQL = `
          act.last_sent_at                                   AS last_sent_at,
          act.channel                                        AS channel,
          lv.arm                                             AS arm,
-         lv.arm_split_pct                                   AS arm_split_pct
-    FROM comms.v_objective_rates r
+         lv.arm_split_pct                                   AS arm_split_pct,
+         r.phase_no::int                                    AS phase_no,
+         r.arms_label                                       AS phase_label,
+         r.phase_from                                       AS phase_from,
+         CASE WHEN r.is_current THEN NULL ELSE r.phase_to END AS phase_to,
+         r.is_current                                       AS phase_is_current,
+         r.n_arms::int                                      AS phase_n_arms,
+         r.is_comparison                                    AS phase_is_comparison
+    FROM comms.v_objective_rates_phased r
     JOIN comms.objectives o
       ON o.objective_key = r.objective_key AND o.version = r.objective_version
     LEFT JOIN comms.v_variant_liveness  lv ON lv.variant_key    = r.variant_key
@@ -176,6 +210,9 @@ const SQL = `
       AND act.rank              =            r.rank
       AND act.experiment_key    IS NOT DISTINCT FROM r.experiment_key
       AND act.variant_key       IS NOT DISTINCT FROM r.variant_key
+   WHERE r.is_comparison
+      OR NOT EXISTS (SELECT 1 FROM comms.v_experiment_phases p2
+                      WHERE p2.experiment_key = r.experiment_key AND p2.is_comparison)
    ORDER BY r.objective_key, r.objective_version, r.rank, r.experiment_key, r.variant_key`;
 
 // ---------------------------------------------------------------------
@@ -292,7 +329,8 @@ export function assembleEngagement(rows: EngagementRow[]): EngagementExperiment[
 // file with the most logic in it renders as "Binary file not shown".
 const SEP = "\u0000";
 const groupKey = (r: RateRow) =>
-  [r.objective_key, r.objective_version, r.rank, r.experiment_key ?? ""].join(SEP);
+  [r.objective_key, r.objective_version, r.rank,
+   r.experiment_key ?? "", r.phase_no ?? 0].join(SEP);
 
 export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
   const groups = new Map<string, RateRow[]>();
@@ -349,6 +387,12 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
       prob_leader_best: round4(conf.prob_leader_best),
       conclusive: conf.conclusive,
       experiment_status: first.experiment_status ?? null,
+      phase_no: first.phase_no ?? 0,
+      phase_label: first.phase_label ?? null,
+      phase_from: first.phase_from ?? null,
+      phase_to: first.phase_to ?? null,
+      phase_is_current: first.phase_is_current !== false,
+      phase_is_comparison: !!first.phase_is_comparison,
       channel: arms.find((r) => r.channel)?.channel ?? null,
       last_sent_at: arms.reduce<string | null>(
         (m, r) => (r.last_sent_at && (!m || r.last_sent_at > m) ? r.last_sent_at : m), null),
@@ -387,6 +431,16 @@ export interface ExperimentCard {
   engagement: EngagementVariant[] | null;
   /** Total decided observations across the primary component. */
   primary_denominator: number;
+  /** Which comparison of this experiment this card is. */
+  phase_no: number;
+  /** e.g. "A-GPT5 vs D-GPT5", or null when the experiment only ever had one. */
+  phase_label: string | null;
+  phase_from: string | null;
+  phase_to: string | null;
+  /** False for a comparison that has finished — the card is history, not news. */
+  phase_is_current: boolean;
+  /** True when this experiment ran more than one comparison over its life. */
+  has_multiple_phases: boolean;
   /** True when only one arm is tagged — no A/B is possible, so show a rate not a race. */
   single_arm: boolean;
 }
@@ -409,14 +463,27 @@ export function assembleExperiments(
 
   const byExp = new Map<string, ComponentMetric[]>();
   for (const c of components) {
-    const k = `${c.objective_key}::${c.experiment_key ?? ""}`;
+    // Keyed by PHASE: A vs B and A vs D are different comparisons that happen
+    // to share a control arm, and pooling them is the bug this fixes.
+    const k = `${c.objective_key}::${c.experiment_key ?? ""}::${c.phase_no}`;
     const g = byExp.get(k);
     if (g) g.push(c); else byExp.set(k, [c]);
   }
 
   const cards: ExperimentCard[] = [];
+  // How many comparisons each experiment ran, so a card only carries a phase
+  // label when there is something to disambiguate it from.
+  const phasesPerExperiment = new Map<string, Set<number>>();
+  for (const c of components) {
+    const ek = `${c.objective_key}::${c.experiment_key ?? ""}`;
+    const set = phasesPerExperiment.get(ek) ?? new Set<number>();
+    set.add(c.phase_no); phasesPerExperiment.set(ek, set);
+  }
+
   for (const comps of byExp.values()) {
     const first = comps[0]!;
+    const multi = (phasesPerExperiment.get(
+      `${first.objective_key}::${first.experiment_key ?? ""}`)?.size ?? 1) > 1;
     const name = experimentName(first.objective_key, first.experiment_key);
     const ordered = [...comps].sort((a, b) => a.rank - b.rank);
     const primary = ordered[0];
@@ -431,6 +498,12 @@ export function assembleExperiments(
       components: ordered,
       engagement: engByExp.get(first.experiment_key ?? "") ?? null,
       primary_denominator: primary ? primary.variants.reduce((s, v) => s + v.denominator, 0) : 0,
+      phase_no: first.phase_no,
+      phase_label: multi ? first.phase_label : null,
+      phase_from: first.phase_from,
+      phase_to: first.phase_to,
+      phase_is_current: first.phase_is_current,
+      has_multiple_phases: multi,
       single_arm: (primary?.variants.length ?? 0) < 2,
     });
   }
@@ -443,7 +516,10 @@ export function assembleExperiments(
 
   // Busiest experiments first inside a program; programs by total volume.
   const groups: ProgramGroup[] = [...byProgram.entries()].map(([program, exps]) => {
-    exps.sort((a, b) => b.primary_denominator - a.primary_denominator || a.title.localeCompare(b.title));
+    exps.sort((a, b) =>
+      Number(b.phase_is_current) - Number(a.phase_is_current)
+      || b.primary_denominator - a.primary_denominator
+      || a.title.localeCompare(b.title));
     return {
       program,
       label: programLabel(program),

@@ -21,7 +21,7 @@ function distinctVariants(card) {
   return [...seen.values()];
 }
 const liveVariants = (card) => distinctVariants(card).filter((v) => v.live);
-const isLive = (card) => (card.components ?? []).some((c) => (c.live_variants ?? 0) > 0);
+const isLive = (card) => card.phase_is_current === true;
 const primaryOf = (card) => (card.components ?? [])[0] ?? null;
 
 /**
@@ -34,7 +34,11 @@ const primaryOf = (card) => (card.components ?? [])[0] ?? null;
 function verdict(c, card) {
   if (!c) return { tone: "waiting", icon: "clock", text: "no data yet" };
   const decided = (c.variants ?? []).reduce((a, v) => a + (v.denominator ?? 0), 0);
-  const arms = (c.variants ?? []).filter((v) => v.live).length || (c.variants ?? []).length;
+  // Count the arms IN THIS COMPARISON, not the ones still sending today. Every
+  // variant in a phase ran concurrently by construction, so a concluded
+  // comparison has retired arms and counting live ones called A vs B — 1,872
+  // decided outcomes across two arms — a "single arm" result.
+  const arms = (c.variants ?? []).length;
   if (card?.single_arm || arms < 2) {
     return { tone: "single", icon: "info",
       text: decided ? `single arm — ${pct(bestRate(c))} of ${plural(decided, "outcome")}` : "single arm, no outcomes yet" };
@@ -68,7 +72,9 @@ async function viewExperiments(view) {
     ${errorBanner()}
     <div class="page-head">
       <h2>Experiments</h2>
-      <p>${plural(totalLive, "experiment")} sending${totalDormant ? ` · ${plural(totalDormant, "retired one")} tucked away` : ""}.
+      <p>${plural(totalLive, "comparison")} running${totalDormant ? ` · ${plural(totalDormant, "concluded one")} tucked away` : ""}.
+         An experiment that changed its arms is split into one card per comparison, each scored only
+         over the window those arms actually ran together.
          Bars span the 95% interval — where they overlap, the difference isn't real yet.</p>
     </div>
     ${groups.length ? groups.map(programBlock).join("")
@@ -100,12 +106,19 @@ function programBlock(g) {
     ${dormant.length ? `
       <div class="archive">
         <button class="archive-toggle" data-archive="${esc(g.program)}">
-          ${icon("archive", 14)} ${open ? "Hide" : "Show"} ${plural(dormant.length, "retired experiment")}
-          <span class="tiny muted">— kept for history, not sending</span>
+          ${icon("archive", 14)} ${open ? "Hide" : "Show"} ${plural(dormant.length, "concluded comparison")}
+          <span class="tiny muted">— finished, kept for the record</span>
         </button>
         ${open ? dormant.map((c) => expCard(c, true, false)).join("") : ""}
       </div>` : ""}
   </section>`;
+}
+
+/** "since 20 Aug" while running, "20 Aug – 24 Aug" once it has finished. */
+function phaseWindow(card) {
+  const d = (t) => new Date(t).toLocaleDateString([], { day: "numeric", month: "short" });
+  if (!card.phase_from) return "";
+  return card.phase_to ? `${d(card.phase_from)} – ${d(card.phase_to)}` : `since ${d(card.phase_from)}`;
 }
 
 const hasVerdict = (card) => (card.components ?? []).some((c) => c.conclusive) && !card.single_arm;
@@ -121,6 +134,9 @@ function expCard(card, isArchive, expanded = !isArchive) {
         <div class="exp-title">${esc(card.title)}</div>
         <div class="exp-sub">
           ${primary?.channel ? chanChip(primary.channel) : ""}
+          ${card.phase_label ? `<span class="chip info" title="This experiment ran more than one comparison; each is scored only over the window its arms actually overlapped">${esc(card.phase_label)}</span>` : ""}
+          ${card.phase_from ? `<span class="chip" title="${esc(card.phase_from)}${card.phase_to ? ` to ${esc(card.phase_to)}` : ""}">${
+              esc(phaseWindow(card))}</span>` : ""}
           ${card.experiment_key ? `<span class="chip mono">${esc(card.experiment_key)}</span>`
             : `<span class="chip warn" title="No experiment registered — these sends cannot be compared">untagged</span>`}
           ${live.length ? `<span class="chip ok">${plural(live.length, "live arm")}</span>`
