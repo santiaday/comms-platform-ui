@@ -88,8 +88,8 @@ function programBlock(g) {
   // Decided first, then by weight of evidence: the top of each program is
   // always the card most worth reading.
   const sorted = [...live].sort((a, b) => {
-    const ca = (a.components ?? []).some((c) => c.conclusive) ? 0 : 1;
-    const cb = (b.components ?? []).some((c) => c.conclusive) ? 0 : 1;
+    const ca = primaryOf(a)?.conclusive ? 0 : 1;
+    const cb = primaryOf(b)?.conclusive ? 0 : 1;
     return ca - cb || b.primary_denominator - a.primary_denominator;
   });
   const open = state.archiveOpen.has(g.program);
@@ -121,7 +121,10 @@ function phaseWindow(card) {
   return card.phase_to ? `${d(card.phase_from)} – ${d(card.phase_to)}` : `since ${d(card.phase_from)}`;
 }
 
-const hasVerdict = (card) => (card.components ?? []).some((c) => c.conclusive) && !card.single_arm;
+// Only the primary outcome constitutes a verdict. A conclusive reply rate is a
+// useful signal, but shipping on it would answer a different question than the
+// one the experiment asks.
+const hasVerdict = (card) => !!primaryOf(card)?.conclusive && !card.single_arm;
 
 function expCard(card, isArchive, expanded = !isArchive) {
   const primary = primaryOf(card);
@@ -173,7 +176,9 @@ function componentBlock(c, card, isArchive) {
 
   return `<div class="component">
     <div class="component-head">
-      <span class="chip ${c.rank === 1 ? "info" : ""}">${c.rank === 1 ? "Primary" : "Secondary"}</span>
+      <span class="chip ${c.rank === 1 ? "info" : ""}"${c.rank >= 3
+        ? ' title="A leading indicator: it resolves the moment a reply does or does not arrive, hours before the demo outcome is known"' : ""
+      }>${c.rank === 1 ? "Primary" : c.rank === 2 ? "Secondary" : "Leading"}</span>
       <span class="what">${esc(humanOutcome(c.outcome_type))}</span>
       <span class="tiny muted mono">${esc(c.outcome_type)} · ${esc(c.eval_mode)}</span>
       <span class="spacer"></span>
