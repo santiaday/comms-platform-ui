@@ -113,7 +113,6 @@ describe("every queried relation is readable by comms_writer", () => {
       "comms.v_email_engagement",
       "comms.v_experiment_phases",
       "comms.v_experiment_status",
-      "comms.v_objective_attainment",
       "comms.v_objective_rates_phased",
       "comms.v_send_pulse",
       "comms.v_variant_liveness",

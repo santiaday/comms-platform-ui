@@ -182,8 +182,8 @@ const SQL = `
          xs.status                                          AS experiment_status,
          (lv.variant_key    IS NOT NULL)                    AS variant_registered,
          (xs.experiment_key IS NOT NULL)                    AS experiment_registered,
-         act.last_sent_at                                   AS last_sent_at,
-         act.channel                                        AS channel,
+         r.last_sent_at                                     AS last_sent_at,
+         r.channel                                          AS channel,
          lv.arm                                             AS arm,
          lv.arm_split_pct                                   AS arm_split_pct,
          r.phase_no::int                                    AS phase_no,
@@ -198,19 +198,14 @@ const SQL = `
       ON o.objective_key = r.objective_key AND o.version = r.objective_version
     LEFT JOIN comms.v_variant_liveness  lv ON lv.variant_key    = r.variant_key
     LEFT JOIN comms.v_experiment_status xs ON xs.experiment_key = r.experiment_key
-    LEFT JOIN (
-           SELECT objective_key, objective_version, rank, experiment_key, variant_key,
-                  max(sent_at)                              AS last_sent_at,
-                  mode() WITHIN GROUP (ORDER BY channel)     AS channel
-             FROM comms.v_objective_attainment
-            GROUP BY 1, 2, 3, 4, 5
-         ) act
-      ON  act.objective_key     =            r.objective_key
-      AND act.objective_version =            r.objective_version
-      AND act.rank              =            r.rank
-      AND act.experiment_key    IS NOT DISTINCT FROM r.experiment_key
-      AND act.variant_key       IS NOT DISTINCT FROM r.variant_key
+   -- Show every comparison, and whatever is running RIGHT NOW even if it is a
+   -- single arm. The previous rule hid the current phase of any experiment that
+   -- had ever had a comparison: MQL Email 1 and 2 were both actively sending
+   -- (337 and 244 sends) and neither appeared on the dashboard at all, because
+   -- their current single-arm phase was filtered out in favour of a concluded
+   -- July model test. Experiments that never had a comparison still show fully.
    WHERE r.is_comparison
+      OR r.is_current
       OR NOT EXISTS (SELECT 1 FROM comms.v_experiment_phases p2
                       WHERE p2.experiment_key = r.experiment_key AND p2.is_comparison)
    ORDER BY r.objective_key, r.objective_version, r.rank, r.experiment_key, r.variant_key`;
@@ -246,12 +241,19 @@ interface EngagementRow {
   bounced: number; unsubscribed: number; complained: number;
 }
 
+// experiment_key is registry-first here too (0080), so the funnel joins onto the
+// same card the rates produce. Without this, a variant registered under
+// MQLDriver-Email-1 reports engagement under the derived MQLDriver-Email-1-A and
+// the card renders with no funnel.
 const ENGAGEMENT_SQL = `
-  SELECT objective_key, experiment_key, variant_key,
-         sent::int, delivered::int, opened::int, clicked::int, replied::int,
-         bounced::int, unsubscribed::int, complained::int
-    FROM comms.v_email_engagement
-   ORDER BY experiment_key, variant_key`;
+  SELECT e.objective_key,
+         COALESCE(lv.experiment_key, e.experiment_key) AS experiment_key,
+         e.variant_key,
+         e.sent::int, e.delivered::int, e.opened::int, e.clicked::int, e.replied::int,
+         e.bounced::int, e.unsubscribed::int, e.complained::int
+    FROM comms.v_email_engagement e
+    LEFT JOIN comms.v_variant_liveness lv ON lv.variant_key = e.variant_key
+   ORDER BY 2, 3`;
 
 export class MetricsError extends Error {}
 
@@ -525,7 +527,7 @@ export function assembleExperiments(
       label: programLabel(program),
       experiments: exps,
       n_experiments: exps.length,
-      n_conclusive: exps.filter((e) => e.components.some((c) => c.conclusive)).length,
+      n_conclusive: exps.filter((e) => !e.single_arm && (e.components[0]?.conclusive ?? false)).length,
       total_decided: exps.reduce((s, e) => s + e.primary_denominator, 0),
     };
   });
