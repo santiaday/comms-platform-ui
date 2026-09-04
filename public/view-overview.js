@@ -4,7 +4,7 @@
 import { esc, icon, pct, num, plural, chanChip, dayTick } from "./fmt.js";
 import { volumeChart } from "./charts.js";
 import { loadMetrics, loadCoverage, errorBanner, skeleton } from "./data.js";
-import { isLive, verdict } from "./view-experiments.js";
+import { isLive, primaryOf, verdict } from "./view-experiments.js";
 import { flagChips } from "./view-coverage.js";
 
 async function viewOverview(view) {
@@ -32,7 +32,10 @@ async function viewOverview(view) {
   const groups = m?.programs ?? [];
   const cards = groups.flatMap((g) => g.experiments ?? []);
   const liveCards = cards.filter(isLive);
-  const conclusive = liveCards.filter((c) => (c.components ?? []).some((x) => x.conclusive && !c.single_arm));
+  // The PRIMARY outcome only. Rank 3 (reply rate) can decide long before the demo
+// metric does, and headlining that as "reached a verdict" would invite shipping
+// on a leading indicator instead of the outcome the experiment exists to test.
+const conclusive = liveCards.filter((c) => !!primaryOf(c)?.conclusive && !c.single_arm);
 
   const covRows = (cov?.coverage ?? []).filter((r) => !r.is_test);
   const broken = covRows.filter((r) => r.health === "broken");
