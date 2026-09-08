@@ -69,10 +69,26 @@ const KNOWN_FORBIDDEN: Record<string, string> = {
  */
 function relationsIn(sql: string): string[] {
   const out = new Set<string>();
-  for (const m of sql.matchAll(/(?<!\bDISTINCT\s+)\b(?:FROM|JOIN)\s+([a-z_][\w]*\.[a-z_][\w]*)/gi)) {
+  for (const m of codeOnly(sql).matchAll(/(?<!\bDISTINCT\s+)\b(?:FROM|JOIN)\s+([a-z_][\w]*\.[a-z_][\w]*)/gi)) {
     out.add(m[1]!.toLowerCase());
   }
   return [...out];
+}
+
+/**
+ * Strip comments before looking for relations.
+ *
+ * Prose about a relation is not a query against it. A doc comment reading
+ * "the incumbent arm, from comms.experiments.fallback_arm" was reported as a
+ * forbidden FROM, which is a false alarm of the worst kind on a security guard:
+ * it trains you to edit the check rather than read it. SQL `--` comments and
+ * TypeScript `//` and block comments all go.
+ */
+function codeOnly(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, " ")   // block comments (TS and SQL)
+    .replace(/(^|[^:])\/\/.*$/gm, "$1 ")   // line comments, but not "https://"
+    .replace(/--.*$/gm, " ");              // SQL line comments
 }
 
 describe("every queried relation is readable by comms_writer", () => {

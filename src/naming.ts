@@ -130,3 +130,34 @@ export function shortVariant(variantKey: string | null, experimentKey: string | 
 export function experimentSortKey(name: ExperimentName): string {
   return `${name.program}::${name.title}`;
 }
+
+/**
+ * A registered arm's display name.
+ *
+ * Arms are stored as registry slugs -- "generic", "ai", "a", "sep", "a_gpt41" --
+ * which are the right thing to key on and the wrong thing to print. The old card
+ * printed the variant key instead, which is how a two-arm test came to be
+ * labelled with a 30-way "vs" list.
+ *
+ * An unregistered variant has no arm, and is its own arm: fall back to the
+ * stripped variant key, which is what the Hub showed before and is still right.
+ */
+export function armLabel(
+  arm: string | null | undefined,
+  variantKey: string | null,
+  experimentKey: string | null,
+): string {
+  if (!arm) return shortVariant(variantKey, experimentKey);
+  return arm
+    .split(/[_\-\s]+/)
+    .filter(Boolean)
+    .map((tok) => {
+      const model = MODEL[tok] ?? MODEL[tok.toUpperCase()];
+      if (model) return model;
+      const gpt = /^gpt(\d)(?:\.?(\d))?$/i.exec(tok);
+      if (gpt) return `GPT-${gpt[1]}${gpt[2] ? `.${gpt[2]}` : ""}`;
+      if (tok.length <= 3) return tok.toUpperCase();
+      return tok[0]!.toUpperCase() + tok.slice(1);
+    })
+    .join(" · ");
+}

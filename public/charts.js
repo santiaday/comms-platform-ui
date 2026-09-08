@@ -154,4 +154,39 @@ function funnel(e) {
   </div>`;
 }
 
-export { volumeChart, intervalBar, stackBar, funnel };
+/**
+ * The effect, drawn against zero.
+ *
+ * An arm-vs-arm card lives or dies on one question: does the interval cross
+ * zero? Two Wilson bars side by side answer it only by eye, and badly when the
+ * arms sit at different heights. This puts the difference itself on a
+ * zero-centred axis, so "no difference" is a bar sitting on the line rather
+ * than a sentence the reader has to take on trust.
+ */
+function effectBar(e) {
+  if (!e || e.diff == null) return "";
+  const span = Math.max(Math.abs(e.ci_low), Math.abs(e.ci_high), 0.02) * 1.15;
+  const x = (v) => 50 + (v / span) * 50;
+  const lo = x(e.ci_low), hi = x(e.ci_high), mid = x(e.diff);
+  const decisive = e.ci_low > 0 || e.ci_high < 0;
+  const colour = !decisive ? "var(--n-400)" : e.diff > 0 ? "var(--ok)" : "var(--bad)";
+  // Same signed formatting as the rest of the card: a real minus sign, not a hyphen.
+  const t = (v) => `${v > 0 ? "+" : v < 0 ? "\u2212" : ""}${Math.abs(v * 100).toFixed(1)}pp`;
+  return `<div class="effectbar">
+    <svg viewBox="0 0 100 26" preserveAspectRatio="none" role="img"
+         aria-label="difference ${t(e.diff)}, 95% interval ${t(e.ci_low)} to ${t(e.ci_high)}">
+      <line x1="0" y1="13" x2="100" y2="13" stroke="var(--border)" vector-effect="non-scaling-stroke"/>
+      <rect x="${Math.min(lo, hi).toFixed(2)}" y="8" width="${Math.max(Math.abs(hi - lo), 0.6).toFixed(2)}"
+            height="10" fill="${colour}" opacity=".26" rx="1"/>
+      <line x1="50" y1="1" x2="50" y2="25" stroke="var(--text)" stroke-dasharray="2 2"
+            opacity=".45" vector-effect="non-scaling-stroke"/>
+      <line x1="${mid.toFixed(2)}" y1="4" x2="${mid.toFixed(2)}" y2="22" stroke="${colour}"
+            stroke-width="3" vector-effect="non-scaling-stroke" stroke-linecap="round"/>
+    </svg>
+    <div class="effectbar-ax tiny muted">
+      <span>${esc(t(-span))}</span><span class="zero">no difference</span><span>${esc(t(span))}</span>
+    </div>
+  </div>`;
+}
+
+export { volumeChart, intervalBar, stackBar, funnel, effectBar };
