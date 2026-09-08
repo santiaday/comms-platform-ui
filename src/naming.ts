@@ -161,3 +161,53 @@ export function armLabel(
     })
     .join(" · ");
 }
+
+/**
+ * What to call one variation on a card whose title is already its audience.
+ *
+ * The card for "2+ days out · Touch 1 · Emerging" must not repeat that in every
+ * row: `DemoDriver-2+Days-E1-Emerging-A-Generic` is, on that card, just
+ * "A · Generic". shortVariant() handles the easy case where the variant key
+ * starts with the experiment key (all the SMS and MQL keys do). It cannot help
+ * DemoDriver-Model, whose variants are named after the AUDIENCE rather than the
+ * experiment, so those get the program prefix and the audience tokens stripped
+ * instead.
+ */
+export function variationLabel(
+  variantKey: string | null,
+  experimentKey: string | null,
+  stratum: string | null,
+): string {
+  if (!variantKey) return "untagged";
+  // shortVariant() prettifies whether or not it managed to strip anything, so
+  // ask the question directly rather than comparing its output to the input.
+  const stripped = !!experimentKey && variantKey.startsWith(experimentKey);
+  const direct = shortVariant(variantKey, experimentKey);
+  if (stripped || !stratum) return direct;
+
+  const tokens = variantKey.split("-").filter(Boolean);
+  const expTokens = (experimentKey ?? "").split("-").filter(Boolean);
+  // Drop the shared program prefix ("DemoDriver"), however many tokens it runs to.
+  let i = 0;
+  while (i < tokens.length && i < expTokens.length && tokens[i] === expTokens[i]) i++;
+  // Then drop anything the audience already says.
+  const audience = new Set(stratum.split("·").map((t) => t.trim()).filter(Boolean));
+  const rest = tokens.slice(i).filter((t) => !audience.has(t));
+  if (!rest.length) return direct;
+  return rest.map((t) => MODEL[t] ?? t).join(" · ");
+}
+
+/**
+ * A stratum key rendered for a card title: "2+Days · E1 · Emerging" becomes
+ * "2+ days out · Touch 1 · Emerging". Unknown tokens pass through unchanged, so
+ * a new segment looks unstyled rather than mislabelled.
+ */
+export function audienceLabel(stratum: string | null): string {
+  if (!stratum) return "";
+  return stratum
+    .split("·")
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => COHORT[t] ?? TOUCH[t] ?? SEGMENT[t] ?? t)
+    .join(" · ");
+}

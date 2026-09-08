@@ -355,8 +355,12 @@ table.grid td.num, table.grid th.num { text-align: right; }
 @media (max-width: 760px) {
   .arm {
     grid-template-columns: 1fr auto;
-    grid-template-areas: "name rate" "bar bar" "sb sb" "vol actions";
+    /* `share` must appear here too. This rule predates the traffic-share cell,
+       and a grid area with no placement is auto-placed outside the template,
+       which broke the row between 721px and 760px. */
+    grid-template-areas: "name rate" "bar bar" "sb sb" "share share" "vol actions";
   }
+  .arm-share { text-align: left; }
   .arm-vol { text-align: left; }
   .arm-actions { opacity: 1; justify-content: flex-end; }
 }
@@ -586,7 +590,9 @@ tr.dayrow td {
 .armchip.off { background: var(--surface-2); color: var(--text-3); }
 .exp-arms .vs { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; }
 
-.exp.flagged { border-color: var(--warn); }
+/* A lopsided split gets a chip and a note, not a coloured ring: it makes a
+   comparison imprecise, not invalid, and six ringed cards read as six alarms. */
+.exp.flagged { border-color: var(--border); }
 
 /* --- allocation problems ------------------------------------------------ */
 .integrity { padding: 12px 16px 0; display: grid; gap: 8px; }
@@ -648,9 +654,20 @@ table.strata td.down { color: var(--bad); font-weight: 620; }
 table.strata .spark { width: 92px; }
 .spark-svg { display: block; width: 100%; height: 12px; }
 
-@media (max-width: 720px) {
-  .arm { grid-template-columns: 1fr 56px 92px; 
-         grid-template-areas: "name rate vol" "bar bar bar" "sb sb sb" "share share actions"; }
-  .arm-share { text-align: left; }
-  table.strata .spark { display: none; }
+
+
+/* --- the one line about an experiment that spans audiences ---------------- */
+.rollup {
+  display: flex; gap: 9px; align-items: flex-start;
+  margin: 0 2px 12px; padding: 11px 13px;
+  border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface);
 }
+.rollup.decisive { border-color: var(--ok); background: var(--ok-soft); }
+.rollup .icon { color: var(--text-3); flex-shrink: 0; margin-top: 1px; }
+.rollup.decisive .icon { color: var(--ok); }
+.rollup strong { font-size: 12.5px; display: block; }
+.rollup .tiny { color: var(--text-2); margin-top: 2px; line-height: 1.55; }
+
+/* The share column is one number wide — literally. "91% of sends" wrapped. */
+.arm-share { font-size: 11.5px; white-space: nowrap; }

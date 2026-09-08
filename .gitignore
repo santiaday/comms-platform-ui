@@ -2,3 +2,13 @@ node_modules
 .env
 *.log
 .DS_Store
+
+# Local preview harness: bakes a real metrics snapshot into HTML for headless
+# screenshots. Never committed — it is generated, and it contains live data.
+.preview/
+public/__preview*.html
+public/__preview*.html
+
+# Scratch space used by review subagents — never part of the change.
+.probe/
+tmp-*.ts

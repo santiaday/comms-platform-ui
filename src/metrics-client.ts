@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { computeConfidence } from "./confidence.js";
-import { shortVariant, armLabel } from "./naming.js";
+import { shortVariant, armLabel, variationLabel } from "./naming.js";
 import {
   stratifiedCompare, sampleRatioMismatch, wilsonInterval,
   type StratifiedComparison, type SrmResult, type Cell,
@@ -44,22 +44,28 @@ export interface VariantMetric {
   split_pct: number | null;
 }
 /**
- * An ARM: the thing actually being tested, pooled over every variant that serves it.
+ * One VARIATION on a card, where the card is one experiment in one audience.
  *
- * This is the distinction the Hub was missing. comms.variations says the Demo
- * Driver email test has two arms -- human-written copy and GPT-5 copy -- served
- * by 38 variant keys across nine audiences. Reading the variant keys as arms
- * produced a card headlined with a 30-way "vs" list and a leaderboard racing
- * "SameDay · SMB" against "NextDay · MM", which measures the audience rather
- * than the copy.
+ * This is the unit the screen exists to compare, and getting it wrong twice is
+ * what made the Demo Driver card unreadable. Keying rows on the variant key
+ * while pooling all eighteen audiences into one card produced a thirty-way
+ * leaderboard racing audiences against each other. Keying them on the registry
+ * ARM instead produced one card with two rows and no head-to-head in it -- and
+ * silently merged the pairs that share an arm (D-GPT5 vs E-GPT5).
+ *
+ * Splitting the card by audience and keying the rows on the variant does both
+ * jobs: every row is a real alternative, and every card compares like with like.
  */
-export interface ArmMetric {
-  /** Registry arm slug, or the variant key when the variant was never registered. */
-  arm: string;
-  /** Display name, e.g. "Generic", "GPT-5", "D". */
+export interface VariationMetric {
+  /** Grouping key: the variant key (or "(none)" for untagged sends). */
+  key: string;
+  variant_key: string | null;
+  /** Display name with the audience stripped out, e.g. "A · Generic". */
   label: string;
-  /** Variant keys pooled into this arm, for the drill-down. */
-  variant_keys: string[];
+  /** Registry arm this variation serves, e.g. "generic" / "ai". Null if unregistered. */
+  arm: string | null;
+  /** That arm, prettified, for a chip: "Generic" / "AI". */
+  arm_label: string | null;
   attained: number;
   failed: number;
   pending: number;
@@ -69,13 +75,14 @@ export interface ArmMetric {
   wilson_high: number | null;
   prob_best: number;
   live: boolean;
-  /** Declared share of traffic (0-100), or null when none was registered. */
+  /**
+   * Registered share of traffic (0-100), or null when the split cannot describe
+   * this card -- which is the case whenever two variations here share an arm.
+   */
   intended_pct: number | null;
-  /** Share of DECIDED OUTCOMES this arm actually received (0-100). */
+  /** Share of decided outcomes this variation actually received (0-100). */
   observed_pct: number;
-  /** How many distinct audiences this arm ran in. */
-  n_strata: number;
-  /** The registered incumbent, which the effect is signed against. */
+  /** Serves the experiment's registered incumbent arm. */
   is_control: boolean;
 }
 
@@ -101,11 +108,15 @@ export interface ComponentMetric {
   /** Most recent send across this component's arms. */
   last_sent_at: string | null;
   /**
-   * The real comparison: one entry per ARM, pooled across its variants.
-   * `variants` is kept for the per-variant drill-down; every headline number
-   * (leader, prob_leader_best, conclusive) is computed over THIS.
+   * The comparison this card is: one entry per variation, all sent to the same
+   * audience. Every headline number is computed over THIS.
    */
-  arms: ArmMetric[];
+  variations: VariationMetric[];
+  /**
+   * The audience this card covers (cohort · touch · segment), or null for an
+   * experiment that runs to one undivided population.
+   */
+  audience: string | null;
   /** The registered incumbent arm, from comms.experiments.fallback_arm. */
   control_arm: string | null;
   /**
@@ -186,6 +197,9 @@ interface RateRow {
  * survive a quiet weekend or a paused sequence without declaring a working
  * program dead, and short enough that a genuinely finished test drops out.
  */
+/** A variation that names itself the baseline, for experiments with no registered control. */
+const LOOKS_CONTROL = /\b(control|baseline|holdout)\b/i;
+
 export const LIVE_WINDOW_DAYS = 14;
 
 /**
@@ -395,9 +409,22 @@ export function assembleEngagement(rows: EngagementRow[]): EngagementExperiment[
 // a raw NUL makes git treat this whole file as binary, and the diff on the
 // file with the most logic in it renders as "Binary file not shown".
 const SEP = "\u0000";
+/**
+ * The grain of a card.
+ *
+ * AUDIENCE IS PART OF THE KEY. DemoDriver-Model is one registered experiment,
+ * but it runs as eighteen separate sends -- one per cohort x touch x segment --
+ * and each of those pits two variations against each other. Keying only on the
+ * experiment rolled all eighteen into a single card, which is how "2+Days · E1 ·
+ * Emerging: A-Generic vs D-GPT5" (a real head-to-head, 715 outcomes) ended up
+ * buried inside one pooled "AI vs Generic" row.
+ *
+ * Experiments that run to a single audience (SMS, MQL, the SLT send tests) have
+ * a null stratum and are unaffected: one audience, one card, as before.
+ */
 const groupKey = (r: RateRow) =>
   [r.objective_key, r.objective_version, r.rank,
-   r.experiment_key ?? "", r.phase_no ?? 0].join(SEP);
+   r.experiment_key ?? "", r.stratum ?? "", r.phase_no ?? 0].join(SEP);
 
 export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
   const groups = new Map<string, RateRow[]>();
@@ -426,74 +453,101 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
     const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
 
     // ------------------------------------------------------------------
-    // Roll the variant rows up to ARMS. An unregistered variant has no arm
-    // and is its own arm, which is exactly how the Hub behaved before -- so
-    // nothing that was previously a two-variant card changes shape.
+    // One row per VARIATION, inside one audience.
+    //
+    // A card is now (experiment x audience), so every row here is a distinct
+    // thing that was actually sent to the same kind of person. That is the
+    // head-to-head, and keying on the registry ARM instead hid two of them:
+    // 2+Days · E1 · SMB runs D-GPT5 against E-GPT5, and SameDay · E1 · SMB runs
+    // A-GPT5 against B-GPT5 -- both pairs share the arm "ai", so both collapsed
+    // to a single row with no comparison in it.
     // ------------------------------------------------------------------
-    const armKeyOf = (r: RateRow) => r.arm ?? r.variant_key ?? "(none)";
-    const byArm = new Map<string, RateRow[]>();
-    for (const r of arms) {
-      const k = armKeyOf(r);
-      const g = byArm.get(k);
-      if (g) g.push(r); else byArm.set(k, [r]);
-    }
     const controlArm = arms.find((r) => r.control_arm)?.control_arm ?? null;
+    const audience = first.stratum ?? null;
     const decidedTotal = arms.reduce((t, r) => t + r.n_denominator, 0);
 
-    const armConf = computeConfidence(
-      [...byArm.entries()].map(([k, rs]) => ({
-        key: k,
-        attained: rs.reduce((t, r) => t + r.n_attained, 0),
-        denominator: rs.reduce((t, r) => t + r.n_denominator, 0),
-      })),
-      threshold,
-      { samples },
-    );
-    const armProb = new Map(armConf.variants.map((v) => [v.key, v.prob_best]));
+    // A registered split describes ARMS. It only describes THIS card's
+    // allocation when each variation here is a different arm; where two
+    // variations share one arm, "50%" says nothing about the split between
+    // them, so the card declines to claim one.
+    const armsHere = arms.map((r) => r.arm ?? r.variant_key ?? "");
+    const splitIsMeaningful = arms.length >= 2 && new Set(armsHere).size === arms.length;
 
-    const armMetrics: ArmMetric[] = [...byArm.entries()].map(([k, rs]) => {
-      const attained = rs.reduce((t, r) => t + r.n_attained, 0);
-      const denominator = rs.reduce((t, r) => t + r.n_denominator, 0);
-      const w = wilsonInterval(attained, denominator);
-      const pct = rs.find((r) => r.arm_split_pct != null && r.arm_split_pct !== "")?.arm_split_pct;
-      const intended = pct == null || !Number.isFinite(Number(pct)) ? null : Number(pct);
+    const variations: VariationMetric[] = arms.map((r) => {
+      const w = wilsonInterval(r.n_attained, r.n_denominator);
+      const raw = r.arm_split_pct;
+      const intended = !splitIsMeaningful || raw == null || raw === "" || !Number.isFinite(Number(raw))
+        ? null : Number(raw);
       return {
-        arm: k,
-        label: armLabel(rs[0]!.arm, rs[0]!.variant_key, first.experiment_key),
-        variant_keys: rs.map((r) => r.variant_key).filter((v): v is string => !!v),
-        attained,
-        failed: rs.reduce((t, r) => t + r.n_failed, 0),
-        pending: rs.reduce((t, r) => t + r.n_pending, 0),
-        denominator,
-        rate: denominator > 0 ? round4(attained / denominator) : null,
-        wilson_low: w ? round4(w.low) : null,
-        wilson_high: w ? round4(w.high) : null,
-        prob_best: round4(armProb.get(k) ?? 0),
-        live: rs.some((r) => isArmLive(r)),
-        intended_pct: intended,
-        observed_pct: decidedTotal > 0 ? Math.round((denominator / decidedTotal) * 1000) / 10 : 0,
-        n_strata: new Set(rs.map((r) => r.stratum ?? "")).size,
-        is_control: controlArm != null && k === controlArm,
-      };
-    }).sort((a, b) => b.prob_best - a.prob_best || b.denominator - a.denominator);
-
-    // The stratified effect only means anything for a head-to-head. With three
-    // or more arms there is no single "the lift", and inventing one would be
-    // the same class of error this whole change exists to fix.
-    let effect: StratifiedComparison | null = null;
-    if (armMetrics.length === 2) {
-      const control = armMetrics.find((a) => a.is_control) ?? armMetrics[1]!;
-      const contender = armMetrics.find((a) => a.arm !== control.arm)!;
-      const cells: Cell[] = arms.map((r) => ({
-        stratum: r.stratum ?? null,
-        arm: armKeyOf(r),
+        key: r.variant_key ?? "(none)",
+        variant_key: r.variant_key,
+        label: variationLabel(r.variant_key, first.experiment_key, audience),
+        arm: r.arm ?? null,
+        _looksControl: LOOKS_CONTROL.test(
+          variationLabel(r.variant_key, first.experiment_key, audience)) ||
+          LOOKS_CONTROL.test(r.variant_key ?? ""),
+        arm_label: r.arm ? armLabel(r.arm, r.variant_key, first.experiment_key) : null,
         attained: r.n_attained,
+        failed: r.n_failed,
+        pending: r.n_pending,
         denominator: r.n_denominator,
+        rate: r.n_denominator > 0 ? round4(r.n_attained / r.n_denominator) : null,
+        wilson_low: w ? round4(w.low) : (r.wilson_low ?? null),
+        wilson_high: w ? round4(w.high) : (r.wilson_high ?? null),
+        prob_best: round4(probByKey.get(r.variant_key ?? "(none)") ?? 0),
+        live: isArmLive(r),
+        intended_pct: intended,
+        observed_pct: decidedTotal > 0 ? Math.round((r.n_denominator / decidedTotal) * 1000) / 10 : 0,
+        is_control: controlArm != null && r.arm === controlArm,
+      } as VariationMetric & { _looksControl: boolean };
+    }).sort((a, b) =>
+      Number(b.is_control) - Number(a.is_control)
+      || Number(b.live) - Number(a.live)
+      || (b.rate ?? -1) - (a.rate ?? -1));
+
+    // Which variation is the CONTROL has to be a stable property of the
+    // experiment, not of today's traffic.
+    //
+    // The first version fell back to `sort(by denominator desc)[1]` -- the
+    // SMALLER arm. On the SLT send tests, which register no control_arm, that
+    // made the roles swap the moment one side pulled ahead by a single send:
+    // "A vs Control, -0.3pp" one morning and "Control vs A, -0.3pp" the next,
+    // off the same data. So: the registry first, then a variation that names
+    // itself a control, then the alphabetically first key, which is arbitrary
+    // but at least never moves.
+    const registered = variations.filter((v) => v.is_control);
+    let controlPick = registered[0]
+      ?? variations.find((v) => (v as any)._looksControl)
+      ?? [...variations].sort((a, b) => a.key.localeCompare(b.key))[0];
+    // Two variations serving one registered arm would otherwise both render a
+    // "control" chip, giving "X control vs Y control".
+    for (const v of variations) v.is_control = v === controlPick && controlArm != null;
+    for (const v of variations) delete (v as any)._looksControl;
+
+    // Exactly two variations is the case this whole screen is for. With three
+    // or more there is no single "the lift", and inventing one would be the
+    // same class of error as pooling across audiences.
+    let effect: StratifiedComparison | null = null;
+    if (variations.length === 2) {
+      const control = controlPick ?? variations[0]!;
+      const contender = variations.find((v) => v.key !== control.key);
+      if (!contender) {
+        // Two rows carrying the same variant key. The view groups by variant, so
+        // this should be impossible -- but a crash here blanks the entire page,
+        // and a dashboard that renders one odd card beats one that renders none.
+        effect = null;
+      } else {
+      const cells: Cell[] = variations.map((v) => ({
+        stratum: audience,
+        arm: v.key,
+        attained: v.attained,
+        denominator: v.denominator,
       }));
-      effect = stratifiedCompare(cells, control.arm, contender.arm);
+      effect = stratifiedCompare(cells, control.key, contender.key);
+      }
     }
     const srm = sampleRatioMismatch(
-      armMetrics.map((a) => ({ arm: a.arm, observed: a.denominator, intended_pct: a.intended_pct })),
+      variations.map((v) => ({ arm: v.key, observed: v.denominator, intended_pct: v.intended_pct })),
     );
 
     // Where a stratified effect exists, IT is the verdict.
@@ -511,6 +565,10 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
     const effectLeader = effect?.diff != null
       ? (effect.diff >= 0 ? effect.contender_arm : effect.control_arm)
       : null;
+    // P(best) over variations is fine here -- one audience, so there is no
+    // cross-audience mix for it to be fooled by. It is still only the fallback
+    // for 3+ way cards; a head-to-head is decided by the interval.
+    const armConf = conf;
     out.push({
       objective_key: first.objective_key,
       objective_version: first.objective_version,
@@ -537,7 +595,8 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
           ? null
           : Number.isFinite(Number(r.arm_split_pct)) ? Number(r.arm_split_pct) : null,
       })),
-      arms: armMetrics,
+      variations,
+      audience,
       control_arm: controlArm,
       effect,
       srm,
@@ -556,7 +615,7 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
       channel: arms.find((r) => r.channel)?.channel ?? null,
       last_sent_at: arms.reduce<string | null>(
         (m, r) => (r.last_sent_at && (!m || r.last_sent_at > m) ? r.last_sent_at : m), null),
-      live_variants: arms.filter((r) => isArmLive(r)).length,
+      live_variants: variations.filter((v) => v.live).length,
     });
   }
   return out.sort((a, b) => a.objective_key.localeCompare(b.objective_key) || a.rank - b.rank
@@ -575,7 +634,7 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
 // that experiment's email engagement, so one card answers one question.
 // ---------------------------------------------------------------------
 
-import { experimentName, programLabel, type Program } from "./naming.js";
+import { experimentName, programLabel, audienceLabel, programOf, type Program } from "./naming.js";
 
 export interface ExperimentCard {
   objective_key: string;
@@ -601,14 +660,40 @@ export interface ExperimentCard {
   phase_is_current: boolean;
   /** True when this experiment ran more than one comparison over its life. */
   has_multiple_phases: boolean;
-  /** True when only one arm is tagged — no A/B is possible, so show a rate not a race. */
+  /** True when only one variation is tagged — no A/B is possible, so show a rate not a race. */
   single_arm: boolean;
+  /** cohort · touch · segment this card covers, raw. Null for a single-audience experiment. */
+  audience: string | null;
+  /** That audience in words, e.g. "2+ days out · Touch 1 · Emerging". */
+  audience_label: string | null;
+  /** This card is one audience of an experiment that runs to several. */
+  is_audience_split: boolean;
+}
+
+/**
+ * An experiment's answer once its audiences are combined — the one number a
+ * per-audience card set cannot show you.
+ *
+ * Computed WITHIN audience and then combined, never pooled. Pooling every send
+ * is what made the GPT-5 copy look 2.5pp ahead of the human-written copy when it
+ * is about 1pp behind inside each audience, and `simpson` records when the two
+ * disagree so the banner can say so out loud.
+ */
+export interface ExperimentRollup extends StratifiedComparison {
+  experiment_key: string | null;
+  objective_key: string;
+  control_label: string;
+  contender_label: string;
+  /** Arms present in the data but not in this two-way comparison. Named, never dropped silently. */
+  ignored_arms: string[];
 }
 
 export interface ProgramGroup {
   program: Program;
   label: string;
   experiments: ExperimentCard[];
+  /** One per experiment that runs to more than one audience. Usually empty. */
+  rollups: ExperimentRollup[];
   /** Roll-ups for the program header. */
   n_experiments: number;
   n_conclusive: number;
@@ -623,11 +708,23 @@ export function assembleExperiments(
 
   const byExp = new Map<string, ComponentMetric[]>();
   for (const c of components) {
-    // Keyed by PHASE: A vs B and A vs D are different comparisons that happen
-    // to share a control arm, and pooling them is the bug this fixes.
-    const k = `${c.objective_key}::${c.experiment_key ?? ""}::${c.phase_no}`;
+    // Keyed by PHASE and AUDIENCE. A vs B and A vs D are different comparisons
+    // that happen to share a control arm; so are the same two variations sent to
+    // 2+Days · E1 · Emerging and to SameDay · E1 · SMB. Pooling either is the
+    // bug this fixes.
+    const k = `${c.objective_key}::${c.experiment_key ?? ""}::${c.audience ?? ""}::${c.phase_no}`;
     const g = byExp.get(k);
     if (g) g.push(c); else byExp.set(k, [c]);
+  }
+
+  // How many audiences each experiment runs to. When it is more than one, the
+  // audience is what distinguishes one card from the next and therefore what the
+  // card should be called -- "Model" eighteen times over is not a title.
+  const audiencesPerExperiment = new Map<string, Set<string>>();
+  for (const c of components) {
+    const ek = `${c.objective_key}::${c.experiment_key ?? ""}`;
+    const set = audiencesPerExperiment.get(ek) ?? new Set<string>();
+    set.add(c.audience ?? ""); audiencesPerExperiment.set(ek, set);
   }
 
   const cards: ExperimentCard[] = [];
@@ -645,6 +742,9 @@ export function assembleExperiments(
     const multi = (phasesPerExperiment.get(
       `${first.objective_key}::${first.experiment_key ?? ""}`)?.size ?? 1) > 1;
     const name = experimentName(first.objective_key, first.experiment_key);
+    const nAudiences = audiencesPerExperiment.get(
+      `${first.objective_key}::${first.experiment_key ?? ""}`)?.size ?? 1;
+    const splitByAudience = nAudiences > 1 && !!first.audience;
     const ordered = [...comps].sort((a, b) => a.rank - b.rank);
     const primary = ordered[0];
     cards.push({
@@ -652,8 +752,12 @@ export function assembleExperiments(
       experiment_key: first.experiment_key,
       program: name.program,
       program_label: name.programLabel,
-      title: name.title,
-      facets: name.facets,
+      title: splitByAudience ? audienceLabel(first.audience) : name.title,
+      facets: splitByAudience ? [...new Set([name.title, ...name.facets])] : name.facets,
+      audience: first.audience,
+      audience_label: first.audience ? audienceLabel(first.audience) : null,
+      /** True when this card is one audience of an experiment that runs to many. */
+      is_audience_split: splitByAudience,
       confidence_threshold: first.confidence_threshold,
       components: ordered,
       engagement: engByExp.get(first.experiment_key ?? "") ?? null,
@@ -664,7 +768,7 @@ export function assembleExperiments(
       phase_to: first.phase_to,
       phase_is_current: first.phase_is_current,
       has_multiple_phases: multi,
-      single_arm: (primary?.arms.length ?? 0) < 2,
+      single_arm: (primary?.variations.length ?? 0) < 2,
     });
   }
 
@@ -674,18 +778,92 @@ export function assembleExperiments(
     if (g) g.push(c); else byProgram.set(c.program, [c]);
   }
 
+  // Roll-ups, for experiments that span audiences. Built from the PRIMARY
+  // component only: a secondary outcome answers a different question and does
+  // not belong in the one line at the top of a program.
+  const rollupByProgram = new Map<Program, ExperimentRollup[]>();
+  const primaries = new Map<string, ComponentMetric[]>();
+  for (const c of components) {
+    if (c.rank !== 1 || !c.audience) continue;
+    const k = `${c.objective_key}::${c.experiment_key ?? ""}`;
+    const g = primaries.get(k);
+    if (g) g.push(c); else primaries.set(k, [c]);
+  }
+  for (const comps of primaries.values()) {
+    const audiences = new Set(comps.map((c) => c.audience));
+    if (audiences.size < 2) continue;
+
+    // The stratum is (audience, PHASE), not audience alone.
+    //
+    // An audience that ran A-vs-B in July and A-vs-C in September is two
+    // separate comparisons. Keying strata on the audience alone silently pooled
+    // them back together, which is the exact error -- a mix of periods with
+    // different base rates masquerading as one -- that stratifying exists to
+    // prevent. Reintroducing it one level up would have been the third time.
+    const cells: Cell[] = [];
+    for (const c of comps) {
+      for (const v of c.variations) {
+        if (!v.arm) continue;
+        cells.push({
+          stratum: `${c.audience} #${c.phase_no}`,
+          arm: v.arm,
+          attained: v.attained,
+          denominator: v.denominator,
+        });
+      }
+    }
+    const first = comps[0]!;
+
+    // Pick the two arms to compare rather than giving up when there are three.
+    // Bailing out on `armKeys.length !== 2` meant a single audience trialling a
+    // third variation erased the whole program line, with nothing said.
+    const volume = new Map<string, number>();
+    for (const x of cells) volume.set(x.arm, (volume.get(x.arm) ?? 0) + x.denominator);
+    const ranked = [...volume.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([a]) => a);
+    if (ranked.length < 2) continue;
+    const control = first.control_arm && volume.has(first.control_arm) ? first.control_arm : ranked[0]!;
+    const contender = ranked.find((a) => a !== control)!;
+    const ignoredArms = ranked.filter((a) => a !== control && a !== contender);
+    const cmp = stratifiedCompare(cells, control, contender);
+    if (cmp.diff == null) continue;
+
+    const labelFor = (arm: string) =>
+      comps.flatMap((c) => c.variations).find((v) => v.arm === arm)?.arm_label
+      ?? armLabel(arm, null, first.experiment_key);
+
+    const program = programOf(first.objective_key, first.experiment_key);
+    const list = rollupByProgram.get(program) ?? [];
+    list.push({
+      ...cmp,
+      experiment_key: first.experiment_key,
+      objective_key: first.objective_key,
+      control_label: labelFor(control),
+      contender_label: labelFor(contender),
+      ignored_arms: ignoredArms.map(labelFor),
+    });
+    rollupByProgram.set(program, list);
+  }
+
   // Busiest experiments first inside a program; programs by total volume.
   const groups: ProgramGroup[] = [...byProgram.entries()].map(([program, exps]) => {
     exps.sort((a, b) =>
       Number(b.phase_is_current) - Number(a.phase_is_current)
+      // A card with two variations in it is the thing this screen is for; one
+      // with a single variation is a rate to watch and belongs underneath.
+      || Number(a.single_arm) - Number(b.single_arm)
       || b.primary_denominator - a.primary_denominator
       || a.title.localeCompare(b.title));
     return {
       program,
       label: programLabel(program),
       experiments: exps,
+      rollups: rollupByProgram.get(program) ?? [],
       n_experiments: exps.length,
-      n_conclusive: exps.filter((e) => !e.single_arm && (e.components[0]?.conclusive ?? false)).length,
+      // LIVE cards only. Counting archived phases made the program header
+      // advertise decisions the Overview did not count, so the two pages
+      // disagreed about how many things had been decided.
+      n_conclusive: exps.filter((e) =>
+        e.phase_is_current && !e.single_arm && (e.components[0]?.conclusive ?? false)).length,
       total_decided: exps.reduce((s, e) => s + e.primary_denominator, 0),
     };
   });

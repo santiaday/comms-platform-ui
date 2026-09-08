@@ -32,6 +32,10 @@ async function viewOverview(view) {
   const groups = m?.programs ?? [];
   const cards = groups.flatMap((g) => g.experiments ?? []);
   const liveCards = cards.filter(isLive);
+  // Count what the Experiments page counts. A card running a single variation is
+  // a rate being watched, not an experiment, and headlining 29 when that page
+  // says 19 just makes the reader distrust both numbers.
+  const headToHead = liveCards.filter((c) => !c.single_arm);
   // The PRIMARY outcome only. Rank 3 (reply rate) can decide long before the demo
 // metric does, and headlining that as "reached a verdict" would invite shipping
 // on a leading indicator instead of the outcome the experiment exists to test.
@@ -61,8 +65,8 @@ const conclusive = liveCards.filter((c) => !!primaryOf(c)?.conclusive && !c.sing
         <div class="stat-sub">${latest.rate == null ? "—" : `${pct(latest.rate)} of today's sends`}</div>
       </div>
       <div class="stat ${conclusive.length ? "accent" : ""}">
-        <div class="stat-label">${icon("flask", 13)} Live experiments</div>
-        <div class="stat-value">${num(liveCards.length)}</div>
+        <div class="stat-label">${icon("flask", 13)} Live head-to-heads</div>
+        <div class="stat-value">${num(headToHead.length)}</div>
         <div class="stat-sub">${conclusive.length ? `${conclusive.length} reached a verdict` : "none conclusive yet"}</div>
       </div>
       <div class="stat ${broken.length ? "danger" : ""}">
@@ -127,11 +131,14 @@ const conclusive = liveCards.filter((c) => !!primaryOf(c)?.conclusive && !c.sing
         <button class="btn ghost tiny" data-href="#/experiments">Open experiments ${icon("chev", 12)}</button></div>
       <div class="card-body tight">
         ${groups.length ? groups.map((g) => {
-          const l = (g.experiments ?? []).filter(isLive).length;
+          const liveHere = (g.experiments ?? []).filter(isLive);
+          const l = liveHere.filter((c) => !c.single_arm).length;
+          const solo = liveHere.length - l;
           return `<button class="rowlink" data-href="#/experiments">
             <span class="rowlink-main">
               <span class="rowlink-title">${esc(g.label)}</span>
-              <span class="rowlink-sub">${plural(l, "live experiment")} of ${g.n_experiments}
+              <span class="rowlink-sub">${plural(l, "live head-to-head")}${
+                solo ? ` · ${solo} running one variation` : ""}
                 · ${num(g.total_decided)} decided outcomes</span>
             </span>
             ${g.n_conclusive ? `<span class="chip ok">${g.n_conclusive} decided</span>` : `<span class="chip">running</span>`}
