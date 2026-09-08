@@ -331,8 +331,8 @@ table.grid td.num, table.grid th.num { text-align: right; }
 .arms { display: grid; gap: 4px; }
 .arm {
   display: grid;
-  grid-template-columns: minmax(104px, 1.2fr) 56px minmax(80px, 1fr) 96px auto;
-  grid-template-areas: "name rate bar vol actions" ".    .    sb  .   .";
+  grid-template-columns: minmax(104px, 1.2fr) 56px minmax(80px, 1fr) 92px 74px auto;
+  grid-template-areas: "name rate bar vol share actions" ".    .    sb  .   .     .";
   gap: 3px 12px; align-items: center;
   padding: 7px 8px; border-radius: var(--radius-sm);
 }
@@ -563,4 +563,94 @@ tr.dayrow td {
   .page-head h2 { font-size: 17px; }
   .stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
   .arm-actions .btn { padding: 5px 7px; }
+}
+
+/* ===========================================================================
+   Arms, effects and audiences.
+
+   Added when the Experiments card was rebuilt around arms rather than variant
+   keys. The visual job here is a hierarchy the old card did not have: what is
+   being compared (arm chips), whether the comparison is trustworthy (integrity),
+   what the answer is (effect), and only then the per-arm rates.
+   ======================================================================== */
+
+/* --- the arms, named in the header ------------------------------------- */
+.exp-arms { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 5px; }
+.armchip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 2px 9px; border-radius: 999px;
+  background: var(--brand-soft); color: var(--brand-text);
+  font-size: 12px; font-weight: 620; line-height: 1.5;
+}
+.armchip .tiny { font-weight: 500; opacity: .7; }
+.armchip.off { background: var(--surface-2); color: var(--text-3); }
+.exp-arms .vs { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; }
+
+.exp.flagged { border-color: var(--warn); }
+
+/* --- allocation problems ------------------------------------------------ */
+.integrity { padding: 12px 16px 0; display: grid; gap: 8px; }
+.integrity-row {
+  display: flex; gap: 9px; align-items: flex-start;
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--warn-soft); border: 1px solid var(--warn);
+}
+.integrity-row .icon { color: var(--warn); flex-shrink: 0; margin-top: 1px; }
+.integrity-row strong { font-size: 12.5px; display: block; }
+.integrity-row .tiny { color: var(--text-2); margin-top: 2px; line-height: 1.5; }
+
+/* --- the headline difference -------------------------------------------- */
+.effect { margin: 12px 16px 0; padding: 13px 15px; border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--border); }
+.effect.decisive { border-color: var(--ok); background: var(--ok-soft); }
+.effect.none { display: flex; gap: 9px; align-items: flex-start; }
+.effect.none .icon { color: var(--warn); flex-shrink: 0; margin-top: 1px; }
+.effect-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.effect-what { font-size: 12.5px; font-weight: 620; }
+.effect-num {
+  font-size: 21px; font-weight: 680; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; color: var(--text-3);
+}
+.effect.decisive .effect-num { color: var(--ok); }
+.effect-read { color: var(--text-3); margin-top: 2px; }
+.effect-warn {
+  margin-top: 9px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bad-soft); color: var(--text-2); line-height: 1.5;
+}
+.effect-warn .icon { color: var(--bad); vertical-align: -2px; margin-right: 3px; }
+.effect-warn strong { color: var(--text); }
+
+.effectbar { margin: 9px 0 3px; }
+.effectbar svg { display: block; width: 100%; height: 26px; }
+.effectbar-ax { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.effectbar-ax .zero { opacity: .8; }
+
+/* --- traffic share, beside each arm ------------------------------------- */
+.arm-share {
+  grid-area: share; font-size: 11.5px; text-align: right;
+  color: var(--text-3); font-variant-numeric: tabular-nums;
+}
+.arm-share.skew { color: var(--warn); font-weight: 620; }
+
+/* --- audience and variant tables ---------------------------------------- */
+table.strata { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+table.strata th {
+  text-align: left; font-weight: 600; font-size: 11px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+table.strata td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.strata tr:last-child td { border-bottom: 0; }
+table.strata tr:hover td { background: var(--surface-2); }
+table.strata .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.strata td.up { color: var(--ok); font-weight: 620; }
+table.strata td.down { color: var(--bad); font-weight: 620; }
+table.strata .spark { width: 92px; }
+.spark-svg { display: block; width: 100%; height: 12px; }
+
+@media (max-width: 720px) {
+  .arm { grid-template-columns: 1fr 56px 92px; 
+         grid-template-areas: "name rate vol" "bar bar bar" "sb sb sb" "share share actions"; }
+  .arm-share { text-align: left; }
+  table.strata .spark { display: none; }
 }

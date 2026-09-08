@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { experimentName, shortVariant, programOf, programLabel } from "../src/naming.js";
+import { experimentName, shortVariant, programOf, programLabel, armLabel } from "../src/naming.js";
 
 describe("shortVariant — the main readability win", () => {
   it("strips the repeated experiment prefix and prettifies the model", () => {
@@ -86,5 +86,32 @@ describe("programOf", () => {
   it("gives every program a human label", () => {
     assert.equal(programLabel("demo_driver_sms"), "Demo Driver — SMS");
     assert.equal(programLabel("hubspot_tofu"), "HubSpot — Top of Funnel");
+  });
+});
+
+describe("armLabel — the registry slug is not a display name", () => {
+  it("prettifies the Demo Driver model arms", () => {
+    assert.equal(armLabel("generic", null, "DemoDriver-Model"), "Generic");
+    assert.equal(armLabel("ai", null, "DemoDriver-Model"), "AI");
+  });
+  it("prettifies single-letter and acronym arms", () => {
+    assert.equal(armLabel("a", null, "DemoDriver-SMS-MorningOf"), "A");
+    assert.equal(armLabel("d", null, "DemoDriver-SMS-MorningOf"), "D");
+    assert.equal(armLabel("sep", null, "MQLDriver-Email-1"), "SEP");
+  });
+  it("decodes a model suffix inside an arm slug", () => {
+    assert.equal(armLabel("a_gpt41", null, "MQLDriver-Email-1"), "A · GPT-4.1");
+    assert.equal(armLabel("a_gpt5", null, "MQLDriver-Email-1"), "A · GPT-5");
+  });
+  it("leaves an already-readable arm alone", () => {
+    assert.equal(armLabel("Control", null, "SLT-01"), "Control");
+    assert.equal(armLabel("gift", null, null), "Gift");
+  });
+  it("falls back to the stripped variant key when the arm was never registered", () => {
+    assert.equal(
+      armLabel(null, "DemoDriver-2+Days-E1-Emerging-D-GPT5", "DemoDriver-2+Days-E1-Emerging"),
+      "D · GPT-5",
+    );
+    assert.equal(armLabel(undefined, null, null), "untagged");
   });
 });

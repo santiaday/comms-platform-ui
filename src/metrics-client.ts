@@ -5,7 +5,11 @@
 
 import { createHash } from "node:crypto";
 import { computeConfidence } from "./confidence.js";
-import { shortVariant } from "./naming.js";
+import { shortVariant, armLabel } from "./naming.js";
+import {
+  stratifiedCompare, sampleRatioMismatch, wilsonInterval,
+  type StratifiedComparison, type SrmResult, type Cell,
+} from "./stratify.js";
 
 // NOTE: there is deliberately NO default endpoint URL here. This repo is
 // public; the address of the internal SQL endpoint is configuration, not
@@ -39,6 +43,42 @@ export interface VariantMetric {
   /** That arm's share of traffic right now, e.g. 50. Null when not running. */
   split_pct: number | null;
 }
+/**
+ * An ARM: the thing actually being tested, pooled over every variant that serves it.
+ *
+ * This is the distinction the Hub was missing. comms.variations says the Demo
+ * Driver email test has two arms -- human-written copy and GPT-5 copy -- served
+ * by 38 variant keys across nine audiences. Reading the variant keys as arms
+ * produced a card headlined with a 30-way "vs" list and a leaderboard racing
+ * "SameDay · SMB" against "NextDay · MM", which measures the audience rather
+ * than the copy.
+ */
+export interface ArmMetric {
+  /** Registry arm slug, or the variant key when the variant was never registered. */
+  arm: string;
+  /** Display name, e.g. "Generic", "GPT-5", "D". */
+  label: string;
+  /** Variant keys pooled into this arm, for the drill-down. */
+  variant_keys: string[];
+  attained: number;
+  failed: number;
+  pending: number;
+  denominator: number;
+  rate: number | null;
+  wilson_low: number | null;
+  wilson_high: number | null;
+  prob_best: number;
+  live: boolean;
+  /** Declared share of traffic (0-100), or null when none was registered. */
+  intended_pct: number | null;
+  /** Share of DECIDED OUTCOMES this arm actually received (0-100). */
+  observed_pct: number;
+  /** How many distinct audiences this arm ran in. */
+  n_strata: number;
+  /** The registered incumbent, which the effect is signed against. */
+  is_control: boolean;
+}
+
 export interface ComponentMetric {
   objective_key: string;
   objective_version: number;
@@ -60,6 +100,22 @@ export interface ComponentMetric {
   channel: string | null;
   /** Most recent send across this component's arms. */
   last_sent_at: string | null;
+  /**
+   * The real comparison: one entry per ARM, pooled across its variants.
+   * `variants` is kept for the per-variant drill-down; every headline number
+   * (leader, prob_leader_best, conclusive) is computed over THIS.
+   */
+  arms: ArmMetric[];
+  /** The registered incumbent arm, from comms.experiments.fallback_arm. */
+  control_arm: string | null;
+  /**
+   * Stratified effect for a two-arm comparison: the contender's lift over the
+   * control, computed within audiences and then combined. Null when there are
+   * not exactly two arms, or when no audience ever ran both.
+   */
+  effect: StratifiedComparison | null;
+  /** Whether allocation matches the declared split. Null when none was declared. */
+  srm: SrmResult | null;
   /** Which comparison this component belongs to (see RateRow.phase_no). */
   phase_no: number;
   phase_label: string | null;
@@ -98,6 +154,10 @@ interface RateRow {
   arm?: string | null;
   /** jsonb -> text, so it arrives as a string like "50". */
   arm_split_pct?: string | null;
+  /** cohort · touch · segment — the audience, not the treatment. */
+  stratum?: string | null;
+  /** The experiment's registered incumbent arm, from comms.experiments.fallback_arm. */
+  control_arm?: string | null;
 
   /**
    * Which comparison this row belongs to.
@@ -186,6 +246,11 @@ const SQL = `
          r.channel                                          AS channel,
          lv.arm                                             AS arm,
          lv.arm_split_pct                                   AS arm_split_pct,
+         -- The audience this variant was written for. Comparing arms ACROSS
+         -- these is what made the AI arm look 2.5pp ahead when it is 1.2pp
+         -- behind within them (0082).
+         r.stratum                                          AS stratum,
+         xs.control_arm                                     AS control_arm,
          r.phase_no::int                                    AS phase_no,
          r.arms_label                                       AS phase_label,
          r.phase_from                                       AS phase_from,
@@ -359,6 +424,93 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
     );
     const probByKey = new Map(conf.variants.map((v) => [v.key, v.prob_best]));
     const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
+
+    // ------------------------------------------------------------------
+    // Roll the variant rows up to ARMS. An unregistered variant has no arm
+    // and is its own arm, which is exactly how the Hub behaved before -- so
+    // nothing that was previously a two-variant card changes shape.
+    // ------------------------------------------------------------------
+    const armKeyOf = (r: RateRow) => r.arm ?? r.variant_key ?? "(none)";
+    const byArm = new Map<string, RateRow[]>();
+    for (const r of arms) {
+      const k = armKeyOf(r);
+      const g = byArm.get(k);
+      if (g) g.push(r); else byArm.set(k, [r]);
+    }
+    const controlArm = arms.find((r) => r.control_arm)?.control_arm ?? null;
+    const decidedTotal = arms.reduce((t, r) => t + r.n_denominator, 0);
+
+    const armConf = computeConfidence(
+      [...byArm.entries()].map(([k, rs]) => ({
+        key: k,
+        attained: rs.reduce((t, r) => t + r.n_attained, 0),
+        denominator: rs.reduce((t, r) => t + r.n_denominator, 0),
+      })),
+      threshold,
+      { samples },
+    );
+    const armProb = new Map(armConf.variants.map((v) => [v.key, v.prob_best]));
+
+    const armMetrics: ArmMetric[] = [...byArm.entries()].map(([k, rs]) => {
+      const attained = rs.reduce((t, r) => t + r.n_attained, 0);
+      const denominator = rs.reduce((t, r) => t + r.n_denominator, 0);
+      const w = wilsonInterval(attained, denominator);
+      const pct = rs.find((r) => r.arm_split_pct != null && r.arm_split_pct !== "")?.arm_split_pct;
+      const intended = pct == null || !Number.isFinite(Number(pct)) ? null : Number(pct);
+      return {
+        arm: k,
+        label: armLabel(rs[0]!.arm, rs[0]!.variant_key, first.experiment_key),
+        variant_keys: rs.map((r) => r.variant_key).filter((v): v is string => !!v),
+        attained,
+        failed: rs.reduce((t, r) => t + r.n_failed, 0),
+        pending: rs.reduce((t, r) => t + r.n_pending, 0),
+        denominator,
+        rate: denominator > 0 ? round4(attained / denominator) : null,
+        wilson_low: w ? round4(w.low) : null,
+        wilson_high: w ? round4(w.high) : null,
+        prob_best: round4(armProb.get(k) ?? 0),
+        live: rs.some((r) => isArmLive(r)),
+        intended_pct: intended,
+        observed_pct: decidedTotal > 0 ? Math.round((denominator / decidedTotal) * 1000) / 10 : 0,
+        n_strata: new Set(rs.map((r) => r.stratum ?? "")).size,
+        is_control: controlArm != null && k === controlArm,
+      };
+    }).sort((a, b) => b.prob_best - a.prob_best || b.denominator - a.denominator);
+
+    // The stratified effect only means anything for a head-to-head. With three
+    // or more arms there is no single "the lift", and inventing one would be
+    // the same class of error this whole change exists to fix.
+    let effect: StratifiedComparison | null = null;
+    if (armMetrics.length === 2) {
+      const control = armMetrics.find((a) => a.is_control) ?? armMetrics[1]!;
+      const contender = armMetrics.find((a) => a.arm !== control.arm)!;
+      const cells: Cell[] = arms.map((r) => ({
+        stratum: r.stratum ?? null,
+        arm: armKeyOf(r),
+        attained: r.n_attained,
+        denominator: r.n_denominator,
+      }));
+      effect = stratifiedCompare(cells, control.arm, contender.arm);
+    }
+    const srm = sampleRatioMismatch(
+      armMetrics.map((a) => ({ arm: a.arm, observed: a.denominator, intended_pct: a.intended_pct })),
+    );
+
+    // Where a stratified effect exists, IT is the verdict.
+    //
+    // P(best) is computed on the arms' pooled totals, which is precisely the
+    // comparison the stratification exists to reject: on Demo Driver it puts
+    // the AI arm around 85% to be best, while the same data compared within
+    // audience is 0.8pp behind with an interval straddling zero. Letting both
+    // onto one card would have it contradict itself, so the head-to-head
+    // defers to the interval and P(best) is kept only for 3+ arm races, where
+    // there is no single effect to compute.
+    const decisive = effect?.diff != null
+      && effect.ci_low != null && effect.ci_high != null
+      && (effect.ci_low > 0 || effect.ci_high < 0);
+    const effectLeader = effect?.diff != null
+      ? (effect.diff >= 0 ? effect.contender_arm : effect.control_arm)
+      : null;
     out.push({
       objective_key: first.objective_key,
       objective_version: first.objective_version,
@@ -385,9 +537,15 @@ export function assemble(rows: RateRow[], samples?: number): ComponentMetric[] {
           ? null
           : Number.isFinite(Number(r.arm_split_pct)) ? Number(r.arm_split_pct) : null,
       })),
-      leader: conf.leader,
-      prob_leader_best: round4(conf.prob_leader_best),
-      conclusive: conf.conclusive,
+      arms: armMetrics,
+      control_arm: controlArm,
+      effect,
+      srm,
+      // Headline verdict is an ARM verdict. Computing it over variants asked
+      // "which of these 30 cells is best", which is a question about audiences.
+      leader: effectLeader ?? armConf.leader,
+      prob_leader_best: round4(armConf.prob_leader_best),
+      conclusive: effect ? decisive : armConf.conclusive,
       experiment_status: first.experiment_status ?? null,
       phase_no: first.phase_no ?? 0,
       phase_label: first.phase_label ?? null,
@@ -506,7 +664,7 @@ export function assembleExperiments(
       phase_to: first.phase_to,
       phase_is_current: first.phase_is_current,
       has_multiple_phases: multi,
-      single_arm: (primary?.variants.length ?? 0) < 2,
+      single_arm: (primary?.arms.length ?? 0) < 2,
     });
   }
 
